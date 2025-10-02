@@ -725,6 +725,80 @@ let response = db.batch_write(request)?;
 println!("Loaded {} items", response.processed_count);
 ```
 
+### Local Secondary Indexes (Phase 3.1+)
+
+#### Creating a table with LSI
+```rust
+use kstone_api::{Database, TableSchema, LocalSecondaryIndex};
+
+// Define schema with LSI on email attribute
+let schema = TableSchema::new()
+    .add_local_index(LocalSecondaryIndex::new("email-index", "email"))
+    .add_local_index(LocalSecondaryIndex::new("score-index", "score"));
+
+let db = Database::create_with_schema(path, schema)?;
+```
+
+#### LSI with projection types
+```rust
+use kstone_api::{LocalSecondaryIndex, IndexProjection};
+
+// Project all attributes (default)
+let lsi_all = LocalSecondaryIndex::new("email-index", "email");
+
+// Project only keys
+let lsi_keys = LocalSecondaryIndex::new("status-index", "status").keys_only();
+
+// Project specific attributes
+let lsi_include = LocalSecondaryIndex::new("name-index", "lastName")
+    .include(vec!["firstName".to_string(), "email".to_string()]);
+
+let schema = TableSchema::new()
+    .add_local_index(lsi_all)
+    .add_local_index(lsi_keys)
+    .add_local_index(lsi_include);
+```
+
+#### Querying by LSI
+```rust
+use kstone_api::Query;
+
+// LSI entries are automatically created when you put items
+db.put(b"org#acme", ItemBuilder::new()
+    .string("name", "Alice")
+    .string("email", "alice@example.com")
+    .number("score", 950)
+    .build())?;
+
+// Query by email using LSI (instead of base table sort key)
+let query = Query::new(b"org#acme")
+    .index("email-index")
+    .sk_begins_with(b"alice");
+
+let response = db.query(query)?;
+
+// All query features work with indexes
+let query = Query::new(b"org#acme")
+    .index("score-index")
+    .sk_gte(b"500")  // Scores >= 500
+    .limit(10)
+    .forward(false); // Descending order
+
+let response = db.query(query)?;
+```
+
+#### LSI query with conditions
+```rust
+// Find all users in org with high scores
+let query = Query::new(b"org#acme")
+    .index("score-index")
+    .sk_between(b"800", b"999")
+    .limit(20);
+
+let response = db.query(query)?;
+println!("Found {} high scorers", response.items.len());
+```
+
 ### Transactions (Phase 2.7+)
 
 #### Transact get - atomic reads
@@ -1141,6 +1215,25 @@ Currently hardcoded at 1000 records (`MEMTABLE_THRESHOLD` in lsm.rs). When memta
 **Phase 2 (Complete Dynamo API) - COMPLETE ✅**
 All sub-phases 2.1-2.7 implemented with full DynamoDB-compatible API.
 
+*Phase 3.1 Local Secondary Indexes (LSI) - COMPLETE ✅*
+- Index infrastructure: LocalSecondaryIndex, IndexProjection, TableSchema
+- Index key encoding with 0xFF marker to distinguish from base records
+- Manifest UpdateSchema record type for storing table schema
+- Automatic LSI materialization during writes (put creates index entries)
+- LSI query support: Query::new(pk).index("index-name").sk_condition()
+- Index key format: [0xFF | index_name_len | index_name | pk | index_sk]
+- Supports String, Number, Binary, Bool, Timestamp as index sort keys
+- Full projection support (All attributes stored in index by default)
+- Stripe routing: index records stored in same stripe as base record
+- Database::create_with_schema() to create table with indexes
+- Query builder .index() method to query by LSI instead of base table
+- All query features work with indexes (pagination, limits, conditions)
+- New module: index.rs (core)
+- New tests: test_lsi_*, test_database_create_with_lsi, test_database_query_by_lsi, test_database_query_lsi_with_condition
+- All tests passing (105 core + 46 API = 151 tests + 6 integration = 157 total)
+
 **Future phases** (not yet implemented):
-- Phase 3: Indexes (GSI, LSI, TTL, Streams)
+- Phase 3.2: GSI (Global Secondary Indexes)
+- Phase 3.3: TTL (Time To Live)
+- Phase 3.4: Streams (Change Data Capture)
 - Phase 4+: Attachment framework (DynamoDB sync, remote KeystoneDB sync)
