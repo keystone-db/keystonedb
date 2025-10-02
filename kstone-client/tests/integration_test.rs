@@ -478,3 +478,158 @@ async fn test_conditional_delete_failure() {
     let retrieved = client.get(b"user#1").await.unwrap();
     assert!(retrieved.is_some());
 }
+
+#[tokio::test]
+async fn test_concurrent_clients() {
+    let (_dir, addr, _handle) = start_test_server().await;
+
+    // Spawn multiple clients concurrently
+    let mut handles = vec![];
+
+    for i in 0..5 {
+        let addr_clone = addr.clone();
+        let handle = tokio::spawn(async move {
+            let mut client = Client::connect(addr_clone).await.unwrap();
+
+            // Each client writes its own items
+            for j in 0..10 {
+                let key = format!("client{}#item{}", i, j);
+                let mut item = HashMap::new();
+                item.insert("client_id".to_string(), Value::N(i.to_string()));
+                item.insert("item_id".to_string(), Value::N(j.to_string()));
+
+                client.put(key.as_bytes(), item).await.unwrap();
+            }
+
+            // Read back and verify
+            for j in 0..10 {
+                let key = format!("client{}#item{}", i, j);
+                let retrieved = client.get(key.as_bytes()).await.unwrap();
+                assert!(retrieved.is_some());
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all clients to complete
+    for handle in handles {
+        handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_concurrent_writes_same_key() {
+    let (_dir, addr, _handle) = start_test_server().await;
+
+    // Multiple clients writing to the same key
+    let mut handles = vec![];
+
+    for i in 0..10 {
+        let addr_clone = addr.clone();
+        let handle = tokio::spawn(async move {
+            let mut client = Client::connect(addr_clone).await.unwrap();
+
+            let mut item = HashMap::new();
+            item.insert("counter".to_string(), Value::N(i.to_string()));
+
+            client.put(b"shared#key", item).await.unwrap();
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all writes
+    for handle in handles {
+        handle.await.unwrap();
+    }
+
+    // Verify the key exists (one of the writes succeeded)
+    let mut client = Client::connect(addr).await.unwrap();
+    let result = client.get(b"shared#key").await.unwrap();
+    assert!(result.is_some());
+}
+
+#[tokio::test]
+async fn test_connection_refused() {
+    // Try to connect to non-existent server
+    let result = Client::connect("http://127.0.0.1:9999").await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_get_nonexistent_item() {
+    let (_dir, addr, _handle) = start_test_server().await;
+    let mut client = Client::connect(addr).await.unwrap();
+
+    // Get item that doesn't exist
+    let result = client.get(b"nonexistent#key").await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_query_nonexistent_partition() {
+    let (_dir, addr, _handle) = start_test_server().await;
+    let mut client = Client::connect(addr).await.unwrap();
+
+    // Query partition that has no items
+    let query = RemoteQuery::new(b"nonexistent#partition");
+    let response = client.query(query).await.unwrap();
+
+    assert_eq!(response.count, 0);
+    assert_eq!(response.items.len(), 0);
+}
+
+#[tokio::test]
+async fn test_invalid_partiql_statement() {
+    let (_dir, addr, _handle) = start_test_server().await;
+    let mut client = Client::connect(addr).await.unwrap();
+
+    // Execute invalid SQL
+    let result = client
+        .execute_statement("INVALID SQL STATEMENT")
+        .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_update_nonexistent_item() {
+    let (_dir, addr, _handle) = start_test_server().await;
+    let mut client = Client::connect(addr).await.unwrap();
+
+    // Try to update item that doesn't exist
+    let update = RemoteUpdate::new(b"nonexistent#item")
+        .expression("SET counter = counter + :inc")
+        .value(":inc", Value::N("1".to_string()));
+
+    let result = client.update(update).await;
+
+    // Should fail because item doesn't exist
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_transact_get_with_missing_items() {
+    let (_dir, addr, _handle) = start_test_server().await;
+    let mut client = Client::connect(addr).await.unwrap();
+
+    // Insert only one item
+    let mut item = HashMap::new();
+    item.insert("name".to_string(), Value::S("Alice".to_string()));
+    client.put(b"user#1", item).await.unwrap();
+
+    // Transact get with mix of existing and non-existing
+    let request = RemoteTransactGetRequest::new()
+        .get(b"user#1")
+        .get(b"user#2")
+        .get(b"user#3");
+
+    let response = client.transact_get(request).await.unwrap();
+
+    // Should get back 3 results, with 2 being None
+    assert_eq!(response.items.len(), 3);
+    assert!(response.items[0].is_some());
+    assert!(response.items[1].is_none());
+    assert!(response.items[2].is_none());
+}
