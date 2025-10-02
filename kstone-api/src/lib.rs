@@ -1103,8 +1103,81 @@ mod tests {
         let retrieved = db.get(b"user#123").unwrap();
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().get("email").unwrap().as_string().unwrap(), "alice@example.com");
+    }
 
-        // TODO: Add query by index once query support is implemented
+    #[test]
+    fn test_database_query_by_lsi() {
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with LSI on email attribute
+        let schema = TableSchema::new()
+            .add_local_index(LocalSecondaryIndex::new("email-index", "email"));
+
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put multiple items for the same partition key
+        for i in 0..5 {
+            let email = format!("user{}@example.com", i);
+            let item = ItemBuilder::new()
+                .string("name", format!("User {}", i))
+                .string("email", &email)
+                .number("age", 20 + i)
+                .build();
+
+            db.put(b"org#acme", item).unwrap();
+        }
+
+        // Query by email using the LSI
+        let query = Query::new(b"org#acme")
+            .index("email-index")
+            .sk_begins_with(b"user");
+
+        let response = db.query(query).unwrap();
+
+        // Should find all 5 items
+        assert_eq!(response.items.len(), 5);
+
+        // Verify items are sorted by email
+        for (i, item) in response.items.iter().enumerate() {
+            let expected_email = format!("user{}@example.com", i);
+            assert_eq!(
+                item.get("email").unwrap().as_string().unwrap(),
+                expected_email
+            );
+        }
+    }
+
+    #[test]
+    fn test_database_query_lsi_with_condition() {
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with LSI on score attribute
+        let schema = TableSchema::new()
+            .add_local_index(LocalSecondaryIndex::new("score-index", "score"));
+
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put items with different scores
+        let scores = vec![100, 250, 500, 750, 900];
+        for (i, score) in scores.iter().enumerate() {
+            let item = ItemBuilder::new()
+                .string("player", format!("Player {}", i))
+                .number("score", *score)
+                .build();
+
+            db.put(b"game#123", item).unwrap();
+        }
+
+        // Query for scores >= 500 using LSI
+        let query = Query::new(b"game#123")
+            .index("score-index")
+            .sk_gte(b"500");
+
+        let response = db.query(query).unwrap();
+
+        // Should find 3 items (500, 750, 900)
+        assert_eq!(response.items.len(), 3);
     }
 }
+
 

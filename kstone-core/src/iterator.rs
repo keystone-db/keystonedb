@@ -38,6 +38,8 @@ pub struct QueryParams {
     pub limit: Option<usize>,
     /// Start key for pagination (exclusive)
     pub start_key: Option<Key>,
+    /// Index name for LSI queries (Phase 3.1+)
+    pub index_name: Option<String>,
 }
 
 impl QueryParams {
@@ -49,6 +51,7 @@ impl QueryParams {
             forward: true,
             limit: None,
             start_key: None,
+            index_name: None,
         }
     }
 
@@ -78,6 +81,12 @@ impl QueryParams {
     /// Set start key for pagination
     pub fn with_start_key(mut self, key: Key) -> Self {
         self.start_key = Some(key);
+        self
+    }
+
+    /// Set index name for LSI query (Phase 3.1+)
+    pub fn with_index_name(mut self, index_name: impl Into<String>) -> Self {
+        self.index_name = Some(index_name.into());
         self
     }
 

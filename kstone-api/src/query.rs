@@ -111,6 +111,12 @@ impl Query {
         self
     }
 
+    /// Query a Local Secondary Index instead of the base table (Phase 3.1+)
+    pub fn index(mut self, index_name: impl Into<String>) -> Self {
+        self.params = self.params.with_index_name(index_name);
+        self
+    }
+
     /// Get the underlying QueryParams
     pub(crate) fn into_params(self) -> QueryParams {
         self.params

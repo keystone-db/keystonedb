@@ -1,7 +1,7 @@
 use crate::{Error, Result, Record, Key, Item, SeqNo, Value, wal::Wal, sst::{SstWriter, SstReader}};
 use crate::iterator::{QueryParams, QueryResult, ScanParams, ScanResult};
 use crate::expression::{UpdateAction, UpdateExecutor, ExpressionContext, Expr, ExpressionEvaluator};
-use crate::index::{TableSchema, encode_index_key};
+use crate::index::{TableSchema, encode_index_key, decode_index_key};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
@@ -359,19 +359,47 @@ impl LsmEngine {
         // We need to merge them by key, taking the newest version (highest SeqNo)
         let mut all_records: BTreeMap<Vec<u8>, Record> = BTreeMap::new();
 
+        // Check if this is an index query (Phase 3.1+)
+        let is_index_query = params.index_name.is_some();
+
         // First, get records from memtable
         for (key_enc, record) in &stripe.memtable {
-            // Check if PK matches
-            if record.key.pk != params.pk {
-                continue;
-            }
+            if is_index_query {
+                // For index queries, check if this is an index key with matching index name and pk
+                if let Some(index_name) = &params.index_name {
+                    if let Some((idx_name, idx_pk, idx_sk)) = decode_index_key(key_enc) {
+                        // Check if index name matches
+                        if idx_name != *index_name {
+                            continue;
+                        }
 
-            // Check sort key condition
-            if !params.matches_sk(&record.key.sk) {
-                continue;
-            }
+                        // Check if PK matches
+                        if idx_pk != params.pk {
+                            continue;
+                        }
 
-            all_records.insert(key_enc.clone(), record.clone());
+                        // Check index sort key condition
+                        if !params.matches_sk(&Some(idx_sk)) {
+                            continue;
+                        }
+
+                        all_records.insert(key_enc.clone(), record.clone());
+                    }
+                }
+            } else {
+                // Base table query
+                // Check if PK matches
+                if record.key.pk != params.pk {
+                    continue;
+                }
+
+                // Check sort key condition
+                if !params.matches_sk(&record.key.sk) {
+                    continue;
+                }
+
+                all_records.insert(key_enc.clone(), record.clone());
+            }
         }
 
         // Then, get records from SSTs (newer SSTs first)
