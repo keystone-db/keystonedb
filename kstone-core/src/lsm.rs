@@ -1,0 +1,804 @@
+use crate::{Error, Result, Record, Key, Item, SeqNo, wal::Wal, sst::{SstWriter, SstReader}};
+use crate::iterator::{QueryParams, QueryResult, ScanParams, ScanResult};
+use parking_lot::RwLock;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::fs;
+
+const MEMTABLE_THRESHOLD: usize = 1000; // Flush after 1000 records per stripe
+const NUM_STRIPES: usize = 256;
+
+/// LSM engine with 256-way striping (Phase 1.6+)
+pub struct LsmEngine {
+    inner: Arc<RwLock<LsmInner>>,
+}
+
+/// A single stripe in the LSM tree
+struct Stripe {
+    memtable: BTreeMap<Vec<u8>, Record>, // Sorted by encoded key
+    ssts: Vec<SstReader>,                 // Newest first
+}
+
+impl Stripe {
+    fn new() -> Self {
+        Self {
+            memtable: BTreeMap::new(),
+            ssts: Vec::new(),
+        }
+    }
+}
+
+struct LsmInner {
+    dir: PathBuf,
+    wal: Wal,
+    stripes: Vec<Stripe>,  // 256 stripes
+    next_seq: SeqNo,       // Global sequence number
+    next_sst_id: u64,      // Global SST ID counter
+}
+
+impl LsmEngine {
+    /// Create a new database
+    pub fn create(dir: impl AsRef<Path>) -> Result<Self> {
+        let dir = dir.as_ref();
+        fs::create_dir_all(dir)?;
+
+        let wal_path = dir.join("wal.log");
+        if wal_path.exists() {
+            return Err(Error::AlreadyExists(dir.display().to_string()));
+        }
+
+        let wal = Wal::create(&wal_path)?;
+
+        // Initialize 256 stripes
+        let stripes = (0..NUM_STRIPES).map(|_| Stripe::new()).collect();
+
+        Ok(Self {
+            inner: Arc::new(RwLock::new(LsmInner {
+                dir: dir.to_path_buf(),
+                wal,
+                stripes,
+                next_seq: 1,
+                next_sst_id: 1,
+            })),
+        })
+    }
+
+    /// Open existing database
+    pub fn open(dir: impl AsRef<Path>) -> Result<Self> {
+        let dir = dir.as_ref();
+        let wal_path = dir.join("wal.log");
+
+        let wal = Wal::open(&wal_path)?;
+
+        // Initialize 256 stripes
+        let mut stripes: Vec<Stripe> = (0..NUM_STRIPES).map(|_| Stripe::new()).collect();
+        let mut max_sst_id = 0u64;
+
+        // Load existing SSTs into appropriate stripes
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                if ext == "sst" {
+                    if let Some(stem) = path.file_stem() {
+                        if let Some(name) = stem.to_str() {
+                            // Parse filename: {stripe:03}-{sst_id}.sst or legacy {sst_id}.sst
+                            if let Some((stripe_str, id_str)) = name.split_once('-') {
+                                // New format: stripe-id
+                                if let (Ok(stripe), Ok(id)) = (stripe_str.parse::<usize>(), id_str.parse::<u64>()) {
+                                    if stripe < NUM_STRIPES {
+                                        max_sst_id = max_sst_id.max(id);
+                                        let reader = SstReader::open(&path)?;
+                                        stripes[stripe].ssts.push(reader);
+                                    }
+                                }
+                            } else {
+                                // Legacy format: just id (assign to stripe 0)
+                                if let Ok(id) = name.parse::<u64>() {
+                                    max_sst_id = max_sst_id.max(id);
+                                    let reader = SstReader::open(&path)?;
+                                    stripes[0].ssts.push(reader);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort SSTs within each stripe (newest first)
+        for stripe in &mut stripes {
+            stripe.ssts.reverse();
+        }
+
+        // Recover from WAL
+        let records = wal.read_all()?;
+        let mut max_seq = 0;
+
+        for (_lsn, record) in records {
+            max_seq = max_seq.max(record.seq);
+            let key_enc = record.key.encode().to_vec();
+            let stripe_id = record.key.stripe() as usize;
+            stripes[stripe_id].memtable.insert(key_enc, record);
+        }
+
+        Ok(Self {
+            inner: Arc::new(RwLock::new(LsmInner {
+                dir: dir.to_path_buf(),
+                wal,
+                stripes,
+                next_seq: max_seq + 1,
+                next_sst_id: max_sst_id + 1,
+            })),
+        })
+    }
+
+    /// Put an item
+    pub fn put(&self, key: Key, item: Item) -> Result<()> {
+        let mut inner = self.inner.write();
+
+        let seq = inner.next_seq;
+        inner.next_seq += 1;
+
+        let record = Record::put(key, item, seq);
+
+        // Write to WAL
+        inner.wal.append(record.clone())?;
+        inner.wal.flush()?;
+
+        // Route to correct stripe
+        let stripe_id = record.key.stripe() as usize;
+        let key_enc = record.key.encode().to_vec();
+        inner.stripes[stripe_id].memtable.insert(key_enc, record);
+
+        // Check if this stripe needs to flush
+        if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
+            self.flush_stripe(&mut inner, stripe_id)?;
+        }
+
+        Ok(())
+    }
+
+    /// Get an item
+    pub fn get(&self, key: &Key) -> Result<Option<Item>> {
+        let inner = self.inner.read();
+
+        // Route to correct stripe
+        let stripe_id = key.stripe() as usize;
+        let stripe = &inner.stripes[stripe_id];
+        let key_enc = key.encode().to_vec();
+
+        // Check stripe's memtable first
+        if let Some(record) = stripe.memtable.get(&key_enc) {
+            return Ok(record.value.clone());
+        }
+
+        // Check stripe's SSTs (newest to oldest)
+        for sst in &stripe.ssts {
+            if let Some(record) = sst.get(key) {
+                return Ok(record.value.clone());
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Delete an item
+    pub fn delete(&self, key: Key) -> Result<()> {
+        let mut inner = self.inner.write();
+
+        let seq = inner.next_seq;
+        inner.next_seq += 1;
+
+        let record = Record::delete(key, seq);
+
+        // Write to WAL
+        inner.wal.append(record.clone())?;
+        inner.wal.flush()?;
+
+        // Route to correct stripe
+        let stripe_id = record.key.stripe() as usize;
+        let key_enc = record.key.encode().to_vec();
+        inner.stripes[stripe_id].memtable.insert(key_enc, record);
+
+        // Check if this stripe needs to flush
+        if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
+            self.flush_stripe(&mut inner, stripe_id)?;
+        }
+
+        Ok(())
+    }
+
+    /// Query items within a partition (Phase 2.1+)
+    pub fn query(&self, params: QueryParams) -> Result<QueryResult> {
+        let inner = self.inner.read();
+
+        // Route to correct stripe
+        let stripe_id = {
+            let temp_key = Key::new(params.pk.clone());
+            temp_key.stripe() as usize
+        };
+        let stripe = &inner.stripes[stripe_id];
+
+        let mut items = Vec::new();
+        let mut seen_keys: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        let mut scanned_count = 0;
+        let mut last_key = None;
+
+        // Collect all matching records from memtable and SSTs
+        // We need to merge them by key, taking the newest version (highest SeqNo)
+        let mut all_records: BTreeMap<Vec<u8>, Record> = BTreeMap::new();
+
+        // First, get records from memtable
+        for (key_enc, record) in &stripe.memtable {
+            // Check if PK matches
+            if record.key.pk != params.pk {
+                continue;
+            }
+
+            // Check sort key condition
+            if !params.matches_sk(&record.key.sk) {
+                continue;
+            }
+
+            all_records.insert(key_enc.clone(), record.clone());
+        }
+
+        // Then, get records from SSTs (newer SSTs first)
+        for _sst in &stripe.ssts {
+            // TODO: Scan SST files for matching records
+            // For now, we only query from memtable
+            // SST scanning will be added when we implement SST iterators
+        }
+
+        // Convert to sorted vec based on direction
+        let mut sorted_records: Vec<(Vec<u8>, Record)> = all_records.into_iter().collect();
+
+        if !params.forward {
+            sorted_records.reverse();
+        }
+
+        // Apply pagination and limit
+        for (key_enc, record) in sorted_records {
+            // Skip based on pagination
+            if params.should_skip(&record.key) {
+                continue;
+            }
+
+            scanned_count += 1;
+
+            // Skip if we've already seen this key (newer version)
+            if seen_keys.contains(&key_enc) {
+                continue;
+            }
+            seen_keys.insert(key_enc);
+
+            // Skip tombstones
+            if record.value.is_none() {
+                continue;
+            }
+
+            last_key = Some(record.key.clone());
+
+            if let Some(item) = record.value {
+                items.push(item);
+
+                // Check limit
+                if let Some(limit) = params.limit {
+                    if items.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(QueryResult::new(items, last_key, scanned_count))
+    }
+
+    /// Scan all items across all stripes (Phase 2.2+)
+    pub fn scan(&self, params: ScanParams) -> Result<ScanResult> {
+        let inner = self.inner.read();
+
+        // Collect all records from all stripes first, then sort globally
+        let mut all_records: BTreeMap<Vec<u8>, Record> = BTreeMap::new();
+
+        // Scan all stripes (or subset for parallel scans)
+        for stripe_id in 0..NUM_STRIPES {
+            // Skip stripes not assigned to this segment
+            if !params.should_scan_stripe(stripe_id) {
+                continue;
+            }
+
+            let stripe = &inner.stripes[stripe_id];
+
+            // Collect from stripe's memtable
+            for (key_enc, record) in &stripe.memtable {
+                // Skip tombstones
+                if record.value.is_none() {
+                    continue;
+                }
+
+                all_records.insert(key_enc.clone(), record.clone());
+            }
+
+            // TODO: Scan stripe's SSTs
+            // Will be added when we implement SST iterators
+        }
+
+        // Now apply pagination and limit on sorted records
+        let mut items = Vec::new();
+        let mut scanned_count = 0;
+        let mut last_key = None;
+
+        for (_, record) in all_records {
+            // Skip based on pagination
+            if params.should_skip(&record.key) {
+                continue;
+            }
+
+            scanned_count += 1;
+            last_key = Some(record.key.clone());
+
+            if let Some(item) = record.value {
+                items.push(item);
+
+                // Check limit
+                if let Some(limit) = params.limit {
+                    if items.len() >= limit {
+                        return Ok(ScanResult::new(items, last_key, scanned_count));
+                    }
+                }
+            }
+        }
+
+        Ok(ScanResult::new(items, last_key, scanned_count))
+    }
+
+    /// Flush a specific stripe's memtable to SST
+    fn flush_stripe(&self, inner: &mut LsmInner, stripe_id: usize) -> Result<()> {
+        if inner.stripes[stripe_id].memtable.is_empty() {
+            return Ok(());
+        }
+
+        let sst_id = inner.next_sst_id;
+        inner.next_sst_id += 1;
+
+        // Filename format: {stripe:03}-{sst_id}.sst
+        let sst_path = inner.dir.join(format!("{:03}-{}.sst", stripe_id, sst_id));
+
+        // Write SST from stripe's memtable
+        let mut writer = SstWriter::new();
+        for record in inner.stripes[stripe_id].memtable.values() {
+            writer.add(record.clone());
+        }
+        writer.finish(&sst_path)?;
+
+        // Load the new SST
+        let reader = SstReader::open(&sst_path)?;
+
+        // Add to front (newest SST) of this stripe
+        inner.stripes[stripe_id].ssts.insert(0, reader);
+
+        // Clear stripe's memtable
+        inner.stripes[stripe_id].memtable.clear();
+
+        Ok(())
+    }
+
+    /// Force flush all stripes (for testing/shutdown)
+    pub fn flush(&self) -> Result<()> {
+        let mut inner = self.inner.write();
+
+        // Flush all non-empty stripes
+        for stripe_id in 0..NUM_STRIPES {
+            if !inner.stripes[stripe_id].memtable.is_empty() {
+                self.flush_stripe(&mut inner, stripe_id)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Value;
+    use tempfile::TempDir;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_lsm_create() {
+        let dir = TempDir::new().unwrap();
+        let _db = LsmEngine::create(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn test_lsm_put_get() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        let key = Key::new(b"user#123".to_vec());
+        let mut item = HashMap::new();
+        item.insert("name".to_string(), Value::string("Alice"));
+        item.insert("age".to_string(), Value::number(30));
+
+        db.put(key.clone(), item.clone()).unwrap();
+
+        let result = db.get(&key).unwrap();
+        assert_eq!(result, Some(item));
+    }
+
+    #[test]
+    fn test_lsm_delete() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        let key = Key::new(b"user#123".to_vec());
+        let mut item = HashMap::new();
+        item.insert("name".to_string(), Value::string("Bob"));
+
+        db.put(key.clone(), item).unwrap();
+        assert!(db.get(&key).unwrap().is_some());
+
+        db.delete(key.clone()).unwrap();
+        assert!(db.get(&key).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_lsm_reopen() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().to_path_buf();
+
+        let key = Key::new(b"persistent".to_vec());
+        let mut item = HashMap::new();
+        item.insert("data".to_string(), Value::string("test"));
+
+        // Write and close
+        {
+            let db = LsmEngine::create(&path).unwrap();
+            db.put(key.clone(), item.clone()).unwrap();
+        }
+
+        // Reopen and verify
+        let db = LsmEngine::open(&path).unwrap();
+        let result = db.get(&key).unwrap();
+        assert_eq!(result, Some(item));
+    }
+
+    #[test]
+    fn test_lsm_flush() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Write many items to trigger flush
+        for i in 0..MEMTABLE_THRESHOLD + 10 {
+            let key = Key::new(format!("key{}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("value".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Verify all items are readable
+        for i in 0..MEMTABLE_THRESHOLD + 10 {
+            let key = Key::new(format!("key{}", i).into_bytes());
+            let result = db.get(&key).unwrap();
+            assert!(result.is_some());
+        }
+    }
+
+    #[test]
+    fn test_lsm_overwrite() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        let key = Key::new(b"counter".to_vec());
+
+        for i in 0..5 {
+            let mut item = HashMap::new();
+            item.insert("value".to_string(), Value::number(i));
+            db.put(key.clone(), item).unwrap();
+        }
+
+        let result = db.get(&key).unwrap().unwrap();
+        match result.get("value").unwrap() {
+            Value::N(n) => assert_eq!(n, "4"),
+            _ => panic!("Expected number value"),
+        }
+    }
+
+    #[test]
+    fn test_lsm_striping() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Insert keys that should go to different stripes
+        let mut keys_by_stripe: HashMap<u8, Vec<Key>> = HashMap::new();
+
+        for i in 0..1000 {
+            let key = Key::new(format!("key{}", i).into_bytes());
+            let stripe = key.stripe();
+
+            let mut item = HashMap::new();
+            item.insert("id".to_string(), Value::number(i));
+            db.put(key.clone(), item).unwrap();
+
+            keys_by_stripe.entry(stripe).or_insert_with(Vec::new).push(key);
+        }
+
+        // Verify multiple stripes were used
+        assert!(keys_by_stripe.len() > 1, "Expected keys to be distributed across multiple stripes");
+
+        // Verify all keys are readable
+        for (stripe, keys) in keys_by_stripe {
+            for key in keys {
+                let result = db.get(&key).unwrap();
+                assert!(result.is_some(), "Key should exist in stripe {}", stripe);
+            }
+        }
+    }
+
+    #[test]
+    fn test_lsm_stripe_independent_flush() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Use composite keys with same PK but different SK - all go to same stripe
+        let pk = b"user#123";
+        let base_key = Key::new(pk.to_vec());
+        let stripe = base_key.stripe();
+
+        // Fill this stripe's memtable using composite keys with sort keys
+        for i in 0..MEMTABLE_THRESHOLD + 10 {
+            let key = Key::with_sk(pk.to_vec(), format!("item#{}", i).into_bytes());
+            // Verify same stripe (stripe is based on PK only)
+            assert_eq!(key.stripe(), stripe);
+
+            let mut item = HashMap::new();
+            item.insert("value".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Force flush
+        db.flush().unwrap();
+
+        // Check that SST file exists with stripe prefix
+        let mut found_striped_sst = false;
+        for entry in fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".sst") && name.starts_with(&format!("{:03}-", stripe)) {
+                    found_striped_sst = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(found_striped_sst, "Expected SST file with stripe prefix");
+    }
+
+    #[test]
+    fn test_lsm_query_basic() {
+        use crate::iterator::QueryParams;
+        use bytes::Bytes;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        let pk = b"user#123";
+
+        // Insert items with different sort keys
+        for i in 0..10 {
+            let key = Key::with_sk(pk.to_vec(), format!("item#{:03}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("id".to_string(), Value::number(i));
+            item.insert("name".to_string(), Value::string(format!("Item {}", i)));
+            db.put(key, item).unwrap();
+        }
+
+        // Query all items in partition
+        let params = QueryParams::new(Bytes::from(pk.to_vec()));
+        let result = db.query(params).unwrap();
+
+        assert_eq!(result.items.len(), 10);
+        assert_eq!(result.scanned_count, 10);
+    }
+
+    #[test]
+    fn test_lsm_query_with_limit() {
+        use crate::iterator::QueryParams;
+        use bytes::Bytes;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        let pk = b"user#456";
+
+        // Insert 20 items
+        for i in 0..20 {
+            let key = Key::with_sk(pk.to_vec(), format!("item#{:03}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("id".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Query with limit of 5
+        let params = QueryParams::new(Bytes::from(pk.to_vec())).with_limit(5);
+        let result = db.query(params).unwrap();
+
+        assert_eq!(result.items.len(), 5);
+        assert!(result.last_key.is_some());
+    }
+
+    #[test]
+    fn test_lsm_query_with_sk_condition() {
+        use crate::iterator::{QueryParams, SortKeyCondition};
+        use bytes::Bytes;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        let pk = b"user#789";
+
+        // Insert items
+        for i in 0..10 {
+            let key = Key::with_sk(pk.to_vec(), format!("item#{:03}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("id".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Query with SK begins_with condition
+        let params = QueryParams::new(Bytes::from(pk.to_vec()))
+            .with_sk_condition(SortKeyCondition::BeginsWith, Bytes::from("item#00"), None);
+        let result = db.query(params).unwrap();
+
+        // Should match item#000 through item#009
+        assert_eq!(result.items.len(), 10);
+    }
+
+    #[test]
+    fn test_lsm_query_reverse() {
+        use crate::iterator::QueryParams;
+        use bytes::Bytes;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        let pk = b"user#999";
+
+        // Insert items
+        for i in 0..5 {
+            let key = Key::with_sk(pk.to_vec(), format!("item#{}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("id".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Query in reverse order
+        let params = QueryParams::new(Bytes::from(pk.to_vec())).with_direction(false);
+        let result = db.query(params).unwrap();
+
+        assert_eq!(result.items.len(), 5);
+        // First item should have highest ID when reversed
+        if let Some(Value::N(n)) = result.items[0].get("id") {
+            assert_eq!(n, "4");
+        } else {
+            panic!("Expected number value");
+        }
+    }
+
+    #[test]
+    fn test_lsm_scan_basic() {
+        use crate::iterator::ScanParams;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Insert items across multiple partitions
+        for i in 0..20 {
+            let pk = format!("user#{}", i);
+            let key = Key::new(pk.into_bytes());
+            let mut item = HashMap::new();
+            item.insert("id".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Scan all items
+        let params = ScanParams::new();
+        let result = db.scan(params).unwrap();
+
+        assert_eq!(result.items.len(), 20);
+        assert_eq!(result.scanned_count, 20);
+    }
+
+    #[test]
+    fn test_lsm_scan_with_limit() {
+        use crate::iterator::ScanParams;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Insert 50 items
+        for i in 0..50 {
+            let pk = format!("item#{:03}", i);
+            let key = Key::new(pk.into_bytes());
+            let mut item = HashMap::new();
+            item.insert("value".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Scan with limit
+        let params = ScanParams::new().with_limit(10);
+        let result = db.scan(params).unwrap();
+
+        assert_eq!(result.items.len(), 10);
+        assert!(result.last_key.is_some());
+    }
+
+    #[test]
+    fn test_lsm_scan_parallel() {
+        use crate::iterator::ScanParams;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Insert items that will distribute across stripes
+        for i in 0..100 {
+            let pk = format!("key{}", i);
+            let key = Key::new(pk.into_bytes());
+            let mut item = HashMap::new();
+            item.insert("value".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Parallel scan with 4 segments
+        let mut total_items = 0;
+        for segment in 0..4 {
+            let params = ScanParams::new().with_segment(segment, 4);
+            let result = db.scan(params).unwrap();
+            total_items += result.items.len();
+        }
+
+        // All segments together should return all items
+        assert_eq!(total_items, 100);
+    }
+
+    #[test]
+    fn test_lsm_scan_pagination() {
+        use crate::iterator::ScanParams;
+
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Insert 30 items
+        for i in 0..30 {
+            let pk = format!("user#{:03}", i);
+            let key = Key::new(pk.into_bytes());
+            let mut item = HashMap::new();
+            item.insert("id".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // First page
+        let params1 = ScanParams::new().with_limit(10);
+        let result1 = db.scan(params1).unwrap();
+        assert_eq!(result1.items.len(), 10);
+        assert!(result1.last_key.is_some());
+
+        // Second page
+        let params2 = ScanParams::new()
+            .with_limit(10)
+            .with_start_key(result1.last_key.unwrap());
+        let result2 = db.scan(params2).unwrap();
+        assert_eq!(result2.items.len(), 10);
+
+        // Third page
+        let params3 = ScanParams::new()
+            .with_limit(10)
+            .with_start_key(result2.last_key.unwrap());
+        let result3 = db.scan(params3).unwrap();
+        assert_eq!(result3.items.len(), 10);
+    }
+}

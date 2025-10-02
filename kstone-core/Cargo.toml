@@ -1,0 +1,25 @@
+[package]
+name = "kstone-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+crossbeam.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+crc32fast.workspace = true
+crc32c.workspace = true
+aes-gcm.workspace = true
+memmap2 = "0.9"
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

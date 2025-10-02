@@ -1,0 +1,12 @@
+[package]
+name = "kstone-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+kstone-api = { path = "../kstone-api" }
+kstone-core = { path = "../kstone-core" }
+tempfile.workspace = true
+anyhow.workspace = true
