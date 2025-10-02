@@ -14,6 +14,9 @@ pub use scan::{Scan, ScanResponse};
 pub mod update;
 pub use update::{Update, UpdateResponse};
 
+pub mod batch;
+pub use batch::{BatchGetRequest, BatchGetResponse, BatchWriteRequest, BatchWriteResponse, BatchWriteItem};
+
 /// KeystoneDB Database handle
 pub struct Database {
     engine: LsmEngine,
@@ -167,6 +170,40 @@ impl Database {
         };
 
         Ok(UpdateResponse::new(updated_item))
+    }
+
+    /// Batch get multiple items (Phase 2.6+)
+    pub fn batch_get(&self, request: BatchGetRequest) -> Result<BatchGetResponse> {
+        let results = self.engine.batch_get(request.keys())?;
+
+        let mut items = std::collections::HashMap::new();
+        for (key, item_opt) in results {
+            if let Some(item) = item_opt {
+                items.insert(key, item);
+            }
+        }
+
+        Ok(BatchGetResponse::new(items))
+    }
+
+    /// Batch write multiple items (Phase 2.6+)
+    pub fn batch_write(&self, request: BatchWriteRequest) -> Result<BatchWriteResponse> {
+        // Convert batch write request to operations
+        let mut operations = Vec::new();
+
+        for item in request.items() {
+            match item {
+                BatchWriteItem::Put { key, item } => {
+                    operations.push((key.clone(), Some(item.clone())));
+                }
+                BatchWriteItem::Delete { key } => {
+                    operations.push((key.clone(), None));
+                }
+            }
+        }
+
+        let processed = self.engine.batch_write(&operations)?;
+        Ok(BatchWriteResponse::new(processed))
     }
 }
 
@@ -697,5 +734,73 @@ mod tests {
 
         let result = db.update(update2);
         assert!(matches!(result, Err(kstone_core::Error::ConditionalCheckFailed(_))));
+    }
+
+    #[test]
+    fn test_database_batch_get() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert some items
+        db.put(b"user#1", ItemBuilder::new().string("name", "Alice").build()).unwrap();
+        db.put(b"user#2", ItemBuilder::new().string("name", "Bob").build()).unwrap();
+        db.put(b"user#3", ItemBuilder::new().string("name", "Charlie").build()).unwrap();
+
+        // Batch get
+        let request = BatchGetRequest::new()
+            .add_key(b"user#1")
+            .add_key(b"user#2")
+            .add_key(b"user#4"); // Doesn't exist
+
+        let response = db.batch_get(request).unwrap();
+
+        assert_eq!(response.items.len(), 2); // Only 2 found
+        assert!(response.items.contains_key(&Key::new(b"user#1".to_vec())));
+        assert!(response.items.contains_key(&Key::new(b"user#2".to_vec())));
+        assert!(!response.items.contains_key(&Key::new(b"user#4".to_vec())));
+    }
+
+    #[test]
+    fn test_database_batch_write() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert initial item
+        db.put(b"user#1", ItemBuilder::new().string("name", "Alice").build()).unwrap();
+
+        // Batch write: put new items and delete one
+        let request = BatchWriteRequest::new()
+            .put(b"user#2", ItemBuilder::new().string("name", "Bob").build())
+            .put(b"user#3", ItemBuilder::new().string("name", "Charlie").build())
+            .delete(b"user#1");
+
+        let response = db.batch_write(request).unwrap();
+        assert_eq!(response.processed_count, 3);
+
+        // Verify results
+        assert!(db.get(b"user#1").unwrap().is_none()); // Deleted
+        assert!(db.get(b"user#2").unwrap().is_some());
+        assert!(db.get(b"user#3").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_database_batch_write_mixed() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Batch write with puts and deletes
+        let request = BatchWriteRequest::new()
+            .put(b"key#1", ItemBuilder::new().number("value", 1).build())
+            .put(b"key#2", ItemBuilder::new().number("value", 2).build())
+            .put_with_sk(b"user#1", b"profile", ItemBuilder::new().string("bio", "test").build())
+            .delete(b"key#1"); // Delete what we just put
+
+        let response = db.batch_write(request).unwrap();
+        assert_eq!(response.processed_count, 4);
+
+        // Verify
+        assert!(db.get(b"key#1").unwrap().is_none());
+        assert!(db.get(b"key#2").unwrap().is_some());
+        assert!(db.get_with_sk(b"user#1", b"profile").unwrap().is_some());
     }
 }

@@ -671,6 +671,60 @@ let update = Update::new(b"user#999")
 let response = db.update(update)?;
 ```
 
+### Batch operations (Phase 2.6+)
+
+#### Batch get - retrieve multiple items
+```rust
+use kstone_api::BatchGetRequest;
+
+// Get multiple items in one call
+let request = BatchGetRequest::new()
+    .add_key(b"user#1")
+    .add_key(b"user#2")
+    .add_key_with_sk(b"user#3", b"profile");
+
+let response = db.batch_get(request)?;
+
+// Response only contains items that were found
+for (key, item) in &response.items {
+    println!("Found: {:?} -> {:?}", key, item);
+}
+```
+
+#### Batch write - put/delete multiple items
+```rust
+use kstone_api::BatchWriteRequest;
+
+// Put and delete multiple items in one call
+let request = BatchWriteRequest::new()
+    .put(b"user#1", ItemBuilder::new().string("name", "Alice").build())
+    .put(b"user#2", ItemBuilder::new().string("name", "Bob").build())
+    .delete(b"user#3") // Delete this item
+    .put_with_sk(b"user#4", b"profile", ItemBuilder::new().string("bio", "test").build());
+
+let response = db.batch_write(request)?;
+println!("Processed {} items", response.processed_count);
+```
+
+#### Batch operations for bulk data loading
+```rust
+// Efficient bulk insert
+let mut request = BatchWriteRequest::new();
+
+for i in 0..100 {
+    let pk = format!("item#{}", i);
+    let item = ItemBuilder::new()
+        .number("id", i)
+        .string("data", format!("Item {}", i))
+        .build();
+
+    request = request.put(pk.as_bytes(), item);
+}
+
+let response = db.batch_write(request)?;
+println!("Loaded {} items", response.processed_count);
+```
+
 ### Conditional operations (Phase 2.5+)
 
 #### Put if not exists (optimistic locking)
@@ -969,7 +1023,18 @@ Currently hardcoded at 1000 records (`MEMTABLE_THRESHOLD` in lsm.rs). When memta
 - New tests: test_database_put_if_not_exists, test_database_update_with_condition, test_database_delete_with_condition, test_database_conditional_attribute_exists
 - All tests passing (99 core + 27 API = 126 tests + 6 integration = 132 total)
 
-*Phase 2.6 Batch Operations - TODO*
+*Phase 2.6 Batch Operations - COMPLETE ✅*
+- BatchGetRequest/Response for retrieving multiple items
+- BatchWriteRequest/Response for putting/deleting multiple items
+- batch_get() in LSM: get multiple keys in one call
+- batch_write() in LSM: put/delete multiple items in one call
+- Builder API: `.add_key()`, `.put()`, `.delete()` for fluent construction
+- Returns only found items (missing keys excluded from response)
+- Processed count tracking for write operations
+- New module: batch.rs (API)
+- New tests: test_batch_get_builder, test_batch_write_builder, test_database_batch_get, test_database_batch_write, test_database_batch_write_mixed
+- All tests passing (99 core + 32 API = 131 tests + 6 integration = 137 total)
+
 *Phase 2.7 Transactions - TODO*
 
 **Future phases** (not yet implemented):

@@ -375,6 +375,38 @@ impl LsmEngine {
         Ok(QueryResult::new(items, last_key, scanned_count))
     }
 
+    /// Batch get multiple items (Phase 2.6+)
+    pub fn batch_get(&self, keys: &[Key]) -> Result<std::collections::HashMap<Key, Option<Item>>> {
+        let mut results = std::collections::HashMap::new();
+
+        for key in keys {
+            let item = self.get(key)?;
+            results.insert(key.clone(), item);
+        }
+
+        Ok(results)
+    }
+
+    /// Batch write multiple items (Phase 2.6+)
+    pub fn batch_write(&self, operations: &[(Key, Option<Item>)]) -> Result<usize> {
+        let mut processed = 0;
+
+        for (key, item_opt) in operations {
+            match item_opt {
+                Some(item) => {
+                    self.put(key.clone(), item.clone())?;
+                    processed += 1;
+                }
+                None => {
+                    self.delete(key.clone())?;
+                    processed += 1;
+                }
+            }
+        }
+
+        Ok(processed)
+    }
+
     /// Scan all items across all stripes (Phase 2.2+)
     pub fn scan(&self, params: ScanParams) -> Result<ScanResult> {
         let inner = self.inner.read();
