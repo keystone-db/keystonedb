@@ -1619,4 +1619,176 @@ All sub-phases 2.1-2.7 implemented with full DynamoDB-compatible API.
 All sub-phases 3.1-3.4 implemented with complete DynamoDB-style secondary indexes, TTL, and streams.
 
 **Future phases** (not yet implemented):
-- Phase 4+: Attachment framework (DynamoDB sync, remote KeystoneDB sync)
+
+**Phase 4: PartiQL Compatibility**
+Add SQL-compatible query language support for DynamoDB-style operations.
+
+*Phase 4.1 PartiQL Parser*
+- Implement SQL parser supporting SELECT, INSERT, UPDATE, DELETE
+- Lexer for SQL tokens (keywords, identifiers, operators, literals)
+- Recursive descent parser for PartiQL grammar
+- AST representation for queries and DML statements
+
+*Phase 4.2 Query Translation*
+- Convert PartiQL SELECT to KeystoneDB Query/Scan operations
+- WHERE clause parsing for partition key and sort key conditions
+- Support for index hints (query LSI/GSI)
+- Pagination support (LIMIT, continuation tokens)
+
+*Phase 4.3 DML Translation*
+- Map INSERT to put operations
+- Map UPDATE to update operations with SET/REMOVE/ADD
+- Map DELETE to delete operations
+- Single-item constraints (PartiQL doesn't support bulk DELETE WHERE)
+
+*Phase 4.4 Expression Mapping*
+- Translate WHERE clauses to existing expression system
+- Convert SQL comparison operators to expression AST
+- Handle attribute names and value placeholders
+- Support for AND/OR/NOT logical operators
+
+*Phase 4.5 CLI Integration*
+- Add `kstone query <path> '<partiql>'` command
+- ExecuteStatement API (single query)
+- BatchExecuteStatement API (batch queries)
+- Result formatting (table/JSON output)
+
+**PartiQL Example Usage:**
+```bash
+# SELECT with WHERE clause
+kstone query mydb.keystone "SELECT * FROM items WHERE pk = 'user#123'"
+
+# SELECT with index
+kstone query mydb.keystone "SELECT * FROM items.email-index WHERE pk = 'org#acme' AND email = 'alice@example.com'"
+
+# INSERT
+kstone query mydb.keystone "INSERT INTO items VALUE {'pk': 'user#999', 'name': 'Alice', 'age': 30}"
+
+# UPDATE
+kstone query mydb.keystone "UPDATE items SET age = 31 WHERE pk = 'user#999'"
+
+# DELETE
+kstone query mydb.keystone "DELETE FROM items WHERE pk = 'user#999'"
+```
+
+**Phase 5: In-Memory Database**
+Provide memory-only database mode for testing and temporary data.
+
+*Phase 5.1 Storage Abstraction*
+- Create StorageBackend trait (abstract disk vs memory)
+- Separate WAL backend (disk file vs memory buffer)
+- Separate SST backend (disk file vs memory map)
+- Refactor LsmEngine to use storage abstraction
+
+*Phase 5.2 In-Memory Implementation*
+- MemoryWal: WAL stored in Vec<Record> (no disk writes)
+- MemorySst: SST stored in Vec<Record> (no disk files)
+- All LSM operations work in-memory
+- No persistence, data lost when database closed
+
+*Phase 5.3 Database Mode Selection*
+- `Database::create_in_memory()` API
+- `Database::create_in_memory_with_schema(schema)` API
+- Optional: `Database::snapshot_to_disk(path)` for exporting
+- Optional: `Database::restore_from_disk(path)` for importing
+
+*Phase 5.4 Test Utilities*
+- Helper functions for creating test databases
+- Performance benchmarks comparing disk vs memory
+- Migration tools for disk → memory (load entire DB into RAM)
+
+**In-Memory Database Example Usage:**
+```rust
+use kstone_api::Database;
+
+// Create in-memory database (no disk I/O)
+let db = Database::create_in_memory()?;
+
+// Same API as disk-based database
+db.put(b"user#123", item)?;
+let result = db.get(b"user#123")?;
+
+// Optional: snapshot to disk
+db.snapshot_to_disk("backup.keystone")?;
+```
+
+**Phase 6: Interactive CLI**
+REPL-style interactive query editor with autocomplete.
+
+*Phase 6.1 REPL Infrastructure*
+- Add rustyline or reedline dependency for line editing
+- `kstone shell <path>` command to enter interactive mode
+- Prompt with database info (path, table schema)
+- Graceful exit with Ctrl+D or `.exit` command
+
+*Phase 6.2 Autocomplete Engine*
+- Context-aware tab completion
+- PartiQL keyword completion (SELECT, FROM, WHERE, INSERT, UPDATE, DELETE)
+- Table attribute name completion (from schema inspection)
+- Index name completion (LSI/GSI names)
+- Function name completion (attribute_exists, begins_with, etc.)
+
+*Phase 6.3 Query History*
+- Persistent command history across sessions
+- Up/down arrow navigation through history
+- Ctrl+R reverse search in history
+- `.history` command to show recent queries
+
+*Phase 6.4 Result Formatting*
+- Pretty-print query results in table format
+- JSON output mode (`.format json`)
+- Compact mode for large result sets
+- Color-coded output (optional, with termcolor)
+- Item count and timing statistics
+
+*Phase 6.5 Multi-line Support*
+- Detect incomplete PartiQL queries
+- Continue prompt for multi-line input
+- Semicolon terminates query
+- Backslash for line continuation
+
+**Interactive CLI Example Usage:**
+```bash
+$ kstone shell mydb.keystone
+
+KeystoneDB Interactive Shell v0.4.0
+Database: mydb.keystone
+Type .help for commands, .exit to quit
+
+kstone> SELECT * FROM items WHERE pk = 'user#123'
+┌─────────────┬───────┬─────┬────────┐
+│ pk          │ name  │ age │ active │
+├─────────────┼───────┼─────┼────────┤
+│ user#123    │ Alice │ 30  │ true   │
+└─────────────┴───────┴─────┴────────┘
+1 row (12.3ms)
+
+kstone> .indexes
+Local Secondary Indexes:
+  - email-index (sort_key: email)
+  - score-index (sort_key: score)
+
+Global Secondary Indexes:
+  - status-index (partition_key: status)
+
+kstone> SELECT * FROM items.status-index WHERE pk = 'active'<TAB>
+                                                              ^
+                                                              [autocomplete: LIMIT, AND, OR]
+
+kstone> .exit
+Goodbye!
+```
+
+**Meta-commands for Interactive CLI:**
+- `.help` - Show available commands
+- `.schema` - Display table schema (indexes, TTL, streams)
+- `.indexes` - List all indexes (LSI/GSI)
+- `.format <table|json|compact>` - Set output format
+- `.history` - Show command history
+- `.timer <on|off>` - Show/hide query timing
+- `.exit` or `.quit` - Exit shell
+
+**Phase 7+: Attachment Framework**
+- DynamoDB sync (bidirectional replication)
+- Remote KeystoneDB sync (peer-to-peer replication)
+- Cloud integration and sync strategies

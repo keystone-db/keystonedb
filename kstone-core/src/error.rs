@@ -54,6 +54,10 @@ pub enum Error {
     // Phase 2.7 additions
     #[error("Transaction canceled: {0}")]
     TransactionCanceled(String),
+
+    // Phase 4 additions
+    #[error("Invalid query: {0}")]
+    InvalidQuery(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

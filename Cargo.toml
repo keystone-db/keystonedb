@@ -42,6 +42,10 @@ zstd = "0.13"
 # CLI
 clap = { version = "4.4", features = ["derive"] }
 
+# PartiQL / SQL parsing
+sqlparser = "0.52"
+base64 = "0.22"
+
 # Testing
 proptest = "1.4"
 tempfile = "3.8"

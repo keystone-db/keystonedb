@@ -19,6 +19,8 @@ crc32fast.workspace = true
 crc32c.workspace = true
 aes-gcm.workspace = true
 memmap2 = "0.9"
+sqlparser.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
