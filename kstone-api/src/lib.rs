@@ -11,6 +11,9 @@ pub use query::{Query, QueryResponse};
 pub mod scan;
 pub use scan::{Scan, ScanResponse};
 
+pub mod update;
+pub use update::{Update, UpdateResponse};
+
 /// KeystoneDB Database handle
 pub struct Database {
     engine: LsmEngine,
@@ -46,6 +49,33 @@ impl Database {
         self.engine.put(key, item)
     }
 
+    /// Put an item with a condition expression (Phase 2.5+)
+    pub fn put_conditional(
+        &self,
+        pk: &[u8],
+        item: Item,
+        condition: &str,
+        context: kstone_core::expression::ExpressionContext,
+    ) -> Result<()> {
+        let key = Key::new(Bytes::copy_from_slice(pk));
+        let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
+        self.engine.put_conditional(key, item, &expr, &context)
+    }
+
+    /// Put an item with partition key, sort key, and condition (Phase 2.5+)
+    pub fn put_conditional_with_sk(
+        &self,
+        pk: &[u8],
+        sk: &[u8],
+        item: Item,
+        condition: &str,
+        context: kstone_core::expression::ExpressionContext,
+    ) -> Result<()> {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
+        let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
+        self.engine.put_conditional(key, item, &expr, &context)
+    }
+
     /// Get an item by partition key
     pub fn get(&self, pk: &[u8]) -> Result<Option<Item>> {
         let key = Key::new(Bytes::copy_from_slice(pk));
@@ -78,6 +108,31 @@ impl Database {
         self.engine.delete(key)
     }
 
+    /// Delete an item with a condition expression (Phase 2.5+)
+    pub fn delete_conditional(
+        &self,
+        pk: &[u8],
+        condition: &str,
+        context: kstone_core::expression::ExpressionContext,
+    ) -> Result<()> {
+        let key = Key::new(Bytes::copy_from_slice(pk));
+        let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
+        self.engine.delete_conditional(key, &expr, &context)
+    }
+
+    /// Delete an item with partition key, sort key, and condition (Phase 2.5+)
+    pub fn delete_conditional_with_sk(
+        &self,
+        pk: &[u8],
+        sk: &[u8],
+        condition: &str,
+        context: kstone_core::expression::ExpressionContext,
+    ) -> Result<()> {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
+        let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
+        self.engine.delete_conditional(key, &expr, &context)
+    }
+
     /// Flush any pending writes
     pub fn flush(&self) -> Result<()> {
         self.engine.flush()
@@ -95,6 +150,23 @@ impl Database {
         let params = scan.into_params();
         let result = self.engine.scan(params)?;
         Ok(ScanResponse::from_result(result))
+    }
+
+    /// Update an item using update expression (Phase 2.4+)
+    pub fn update(&self, update: Update) -> Result<UpdateResponse> {
+        let key = update.key().clone();
+        let (actions, condition_expr, context) = update.into_actions()?;
+
+        let updated_item = if let Some(condition_str) = condition_expr {
+            // Parse condition and call conditional update
+            let condition = kstone_core::expression::ExpressionParser::parse(&condition_str)?;
+            self.engine.update_conditional(&key, &actions, &condition, &context)?
+        } else {
+            // No condition, regular update
+            self.engine.update(&key, &actions, &context)?
+        };
+
+        Ok(UpdateResponse::new(updated_item))
     }
 }
 
@@ -386,5 +458,244 @@ mod tests {
 
         // All segments together should return all items
         assert_eq!(total_items, 100);
+    }
+
+    #[test]
+    fn test_database_update_set() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert initial item
+        let item = ItemBuilder::new()
+            .string("name", "Alice")
+            .number("age", 25)
+            .build();
+        db.put(b"user#123", item).unwrap();
+
+        // Update with SET
+        let update = Update::new(b"user#123")
+            .expression("SET age = :new_age")
+            .value(":new_age", Value::number(30));
+
+        let response = db.update(update).unwrap();
+
+        match response.item.get("age").unwrap() {
+            Value::N(n) => assert_eq!(n, "30"),
+            _ => panic!("Expected number"),
+        }
+        assert_eq!(response.item.get("name").unwrap().as_string(), Some("Alice"));
+    }
+
+    #[test]
+    fn test_database_update_increment() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert initial item
+        let item = ItemBuilder::new().number("score", 100).build();
+        db.put(b"game#456", item).unwrap();
+
+        // Increment score
+        let update = Update::new(b"game#456")
+            .expression("SET score = score + :inc")
+            .value(":inc", Value::number(50));
+
+        let response = db.update(update).unwrap();
+
+        match response.item.get("score").unwrap() {
+            Value::N(n) => assert_eq!(n, "150"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_database_update_remove() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert initial item
+        let item = ItemBuilder::new()
+            .string("name", "Bob")
+            .string("temp", "delete_me")
+            .build();
+        db.put(b"user#789", item).unwrap();
+
+        // Remove temp attribute
+        let update = Update::new(b"user#789")
+            .expression("REMOVE temp");
+
+        let response = db.update(update).unwrap();
+
+        assert!(!response.item.contains_key("temp"));
+        assert_eq!(response.item.get("name").unwrap().as_string(), Some("Bob"));
+    }
+
+    #[test]
+    fn test_database_update_multiple_actions() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert initial item
+        let item = ItemBuilder::new()
+            .number("age", 25)
+            .number("score", 100)
+            .string("temp", "delete")
+            .build();
+        db.put(b"user#999", item).unwrap();
+
+        // Multiple actions
+        let update = Update::new(b"user#999")
+            .expression("SET age = :new_age, active = :is_active REMOVE temp ADD score :bonus")
+            .value(":new_age", Value::number(26))
+            .value(":is_active", Value::Bool(true))
+            .value(":bonus", Value::number(50));
+
+        let response = db.update(update).unwrap();
+
+        match response.item.get("age").unwrap() {
+            Value::N(n) => assert_eq!(n, "26"),
+            _ => panic!("Expected number"),
+        }
+        assert_eq!(response.item.get("active").unwrap(), &Value::Bool(true));
+        assert!(!response.item.contains_key("temp"));
+        match response.item.get("score").unwrap() {
+            Value::N(n) => assert_eq!(n, "150"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_database_put_if_not_exists() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // First put should succeed
+        let item = ItemBuilder::new().string("name", "Alice").build();
+        let context = kstone_core::expression::ExpressionContext::new();
+
+        db.put_conditional(
+            b"user#123",
+            item.clone(),
+            "attribute_not_exists(name)",
+            context.clone(),
+        )
+        .unwrap();
+
+        // Second put should fail (item exists)
+        let result = db.put_conditional(
+            b"user#123",
+            item,
+            "attribute_not_exists(name)",
+            context,
+        );
+
+        assert!(matches!(result, Err(kstone_core::Error::ConditionalCheckFailed(_))));
+    }
+
+    #[test]
+    fn test_database_update_with_condition() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert initial item
+        let item = ItemBuilder::new()
+            .string("name", "Bob")
+            .number("age", 25)
+            .build();
+        db.put(b"user#456", item).unwrap();
+
+        // Update with condition that passes
+        let update = Update::new(b"user#456")
+            .expression("SET age = :new_age")
+            .condition("age = :old_age")
+            .value(":new_age", Value::number(26))
+            .value(":old_age", Value::number(25));
+
+        let response = db.update(update).unwrap();
+
+        match response.item.get("age").unwrap() {
+            Value::N(n) => assert_eq!(n, "26"),
+            _ => panic!("Expected number"),
+        }
+
+        // Update with condition that fails
+        let update2 = Update::new(b"user#456")
+            .expression("SET age = :new_age")
+            .condition("age = :wrong_age")
+            .value(":new_age", Value::number(30))
+            .value(":wrong_age", Value::number(99));
+
+        let result = db.update(update2);
+        assert!(matches!(result, Err(kstone_core::Error::ConditionalCheckFailed(_))));
+    }
+
+    #[test]
+    fn test_database_delete_with_condition() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert item
+        let item = ItemBuilder::new()
+            .string("status", "inactive")
+            .build();
+        db.put(b"user#789", item).unwrap();
+
+        // Try to delete with failing condition
+        let context = kstone_core::expression::ExpressionContext::new()
+            .with_value(":status", Value::string("active"));
+
+        let result = db.delete_conditional(
+            b"user#789",
+            "status = :status",
+            context,
+        );
+
+        assert!(matches!(result, Err(kstone_core::Error::ConditionalCheckFailed(_))));
+
+        // Delete with passing condition
+        let context2 = kstone_core::expression::ExpressionContext::new()
+            .with_value(":status", Value::string("inactive"));
+
+        db.delete_conditional(
+            b"user#789",
+            "status = :status",
+            context2,
+        )
+        .unwrap();
+
+        // Verify deleted
+        let result = db.get(b"user#789").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_database_conditional_attribute_exists() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert item with email
+        let item = ItemBuilder::new()
+            .string("name", "Charlie")
+            .string("email", "charlie@example.com")
+            .build();
+        db.put(b"user#999", item).unwrap();
+
+        // Update only if email exists
+        let update = Update::new(b"user#999")
+            .expression("SET verified = :val")
+            .condition("attribute_exists(email)")
+            .value(":val", Value::Bool(true));
+
+        let response = db.update(update).unwrap();
+        assert_eq!(response.item.get("verified").unwrap(), &Value::Bool(true));
+
+        // Try to update non-existent item (should fail)
+        let update2 = Update::new(b"user#000")
+            .expression("SET verified = :val")
+            .condition("attribute_exists(email)")
+            .value(":val", Value::Bool(true));
+
+        let result = db.update(update2);
+        assert!(matches!(result, Err(kstone_core::Error::ConditionalCheckFailed(_))));
     }
 }

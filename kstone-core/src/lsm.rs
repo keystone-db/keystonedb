@@ -1,5 +1,6 @@
 use crate::{Error, Result, Record, Key, Item, SeqNo, wal::Wal, sst::{SstWriter, SstReader}};
 use crate::iterator::{QueryParams, QueryResult, ScanParams, ScanResult};
+use crate::expression::{UpdateAction, UpdateExecutor, ExpressionContext, Expr, ExpressionEvaluator};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -160,6 +161,23 @@ impl LsmEngine {
         Ok(())
     }
 
+    /// Put an item with a condition expression (Phase 2.5+)
+    pub fn put_conditional(&self, key: Key, item: Item, condition: &Expr, context: &ExpressionContext) -> Result<()> {
+        // Get current item (if exists)
+        let current_item = self.get(&key)?.unwrap_or_else(|| std::collections::HashMap::new());
+
+        // Evaluate condition
+        let evaluator = ExpressionEvaluator::new(&current_item, context);
+        let condition_passed = evaluator.evaluate(condition)?;
+
+        if !condition_passed {
+            return Err(Error::ConditionalCheckFailed("Put condition failed".into()));
+        }
+
+        // Condition passed, proceed with put
+        self.put(key, item)
+    }
+
     /// Get an item
     pub fn get(&self, key: &Key) -> Result<Option<Item>> {
         let inner = self.inner.read();
@@ -208,6 +226,67 @@ impl LsmEngine {
         }
 
         Ok(())
+    }
+
+    /// Delete an item with a condition expression (Phase 2.5+)
+    pub fn delete_conditional(&self, key: Key, condition: &Expr, context: &ExpressionContext) -> Result<()> {
+        // Get current item
+        let current_item = self.get(&key)?.unwrap_or_else(|| std::collections::HashMap::new());
+
+        // Evaluate condition
+        let evaluator = ExpressionEvaluator::new(&current_item, context);
+        let condition_passed = evaluator.evaluate(condition)?;
+
+        if !condition_passed {
+            return Err(Error::ConditionalCheckFailed("Delete condition failed".into()));
+        }
+
+        // Condition passed, proceed with delete
+        self.delete(key)
+    }
+
+    /// Update an item using update expression (Phase 2.4+)
+    pub fn update(&self, key: &Key, actions: &[UpdateAction], context: &ExpressionContext) -> Result<Item> {
+        // First, get the current item (or create empty if doesn't exist)
+        let current_item = self.get(key)?.unwrap_or_else(|| std::collections::HashMap::new());
+
+        // Execute update actions
+        let executor = UpdateExecutor::new(context);
+        let updated_item = executor.execute(&current_item, actions)?;
+
+        // Put the updated item
+        self.put(key.clone(), updated_item.clone())?;
+
+        Ok(updated_item)
+    }
+
+    /// Update an item with a condition expression (Phase 2.5+)
+    pub fn update_conditional(
+        &self,
+        key: &Key,
+        actions: &[UpdateAction],
+        condition: &Expr,
+        context: &ExpressionContext,
+    ) -> Result<Item> {
+        // Get current item (or create empty if doesn't exist)
+        let current_item = self.get(key)?.unwrap_or_else(|| std::collections::HashMap::new());
+
+        // Evaluate condition
+        let evaluator = ExpressionEvaluator::new(&current_item, context);
+        let condition_passed = evaluator.evaluate(condition)?;
+
+        if !condition_passed {
+            return Err(Error::ConditionalCheckFailed("Update condition failed".into()));
+        }
+
+        // Condition passed, execute update
+        let executor = UpdateExecutor::new(context);
+        let updated_item = executor.execute(&current_item, actions)?;
+
+        // Put the updated item
+        self.put(key.clone(), updated_item.clone())?;
+
+        Ok(updated_item)
     }
 
     /// Query items within a partition (Phase 2.1+)

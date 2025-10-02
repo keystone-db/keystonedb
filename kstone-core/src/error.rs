@@ -46,6 +46,10 @@ pub enum Error {
     // Phase 2.3 additions
     #[error("Invalid expression: {0}")]
     InvalidExpression(String),
+
+    // Phase 2.5 additions
+    #[error("Conditional check failed: {0}")]
+    ConditionalCheckFailed(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

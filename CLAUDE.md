@@ -608,6 +608,148 @@ for handle in handles {
 println!("Total items: {}", all_items.len());
 ```
 
+### Updating items (Phase 2.4+)
+
+#### Simple SET operation
+```rust
+use kstone_api::Update;
+use kstone_core::Value;
+
+let update = Update::new(b"user#123")
+    .expression("SET age = :new_age")
+    .value(":new_age", Value::number(30));
+
+let response = db.update(update)?;
+println!("Updated item: {:?}", response.item);
+```
+
+#### Increment/decrement with arithmetic
+```rust
+// Increment score
+let update = Update::new(b"game#456")
+    .expression("SET score = score + :inc")
+    .value(":inc", Value::number(50));
+
+let response = db.update(update)?;
+
+// Decrement lives
+let update = Update::new(b"game#456")
+    .expression("SET lives = lives - :dec")
+    .value(":dec", Value::number(1));
+
+let response = db.update(update)?;
+```
+
+#### Remove attributes
+```rust
+// Remove temporary or sensitive attributes
+let update = Update::new(b"user#789")
+    .expression("REMOVE temp, verification_code");
+
+let response = db.update(update)?;
+```
+
+#### ADD operation (atomic addition)
+```rust
+// Add to existing number (creates if doesn't exist)
+let update = Update::new(b"counter#global")
+    .expression("ADD views :count")
+    .value(":count", Value::number(1));
+
+let response = db.update(update)?;
+```
+
+#### Multiple actions
+```rust
+// Combine SET, REMOVE, and ADD in one update
+let update = Update::new(b"user#999")
+    .expression("SET last_login = :now, status = :active REMOVE temp ADD login_count :inc")
+    .value(":now", Value::number(1704067200))
+    .value(":active", Value::string("online"))
+    .value(":inc", Value::number(1));
+
+let response = db.update(update)?;
+```
+
+### Conditional operations (Phase 2.5+)
+
+#### Put if not exists (optimistic locking)
+```rust
+use kstone_core::expression::ExpressionContext;
+
+// Only put if item doesn't exist
+let item = ItemBuilder::new().string("name", "Alice").build();
+let context = ExpressionContext::new();
+
+match db.put_conditional(
+    b"user#123",
+    item,
+    "attribute_not_exists(name)",  // Condition: name attribute doesn't exist
+    context,
+) {
+    Ok(_) => println!("Item created"),
+    Err(kstone_core::Error::ConditionalCheckFailed(_)) => {
+        println!("Item already exists");
+    }
+    Err(e) => println!("Error: {}", e),
+}
+```
+
+#### Conditional update (optimistic locking)
+```rust
+// Only update if age hasn't changed (optimistic locking)
+let update = Update::new(b"user#456")
+    .expression("SET age = :new_age")
+    .condition("age = :old_age")  // Condition: age must equal expected value
+    .value(":new_age", Value::number(26))
+    .value(":old_age", Value::number(25));
+
+match db.update(update) {
+    Ok(response) => println!("Updated: {:?}", response.item),
+    Err(kstone_core::Error::ConditionalCheckFailed(_)) => {
+        println!("Update conflict - age was modified by another process");
+    }
+    Err(e) => println!("Error: {}", e),
+}
+```
+
+#### Conditional delete
+```rust
+// Only delete if status is inactive
+let context = ExpressionContext::new()
+    .with_value(":status", Value::string("inactive"));
+
+db.delete_conditional(
+    b"user#789",
+    "status = :status",
+    context,
+)?;
+```
+
+#### Update with attribute_exists check
+```rust
+// Only update if email attribute exists
+let update = Update::new(b"user#999")
+    .expression("SET verified = :val")
+    .condition("attribute_exists(email)")
+    .value(":val", Value::Bool(true));
+
+let response = db.update(update)?;
+```
+
+#### Complex conditional expressions
+```rust
+// Update only if age >= 18 AND account is active
+let update = Update::new(b"user#111")
+    .expression("SET can_vote = :val")
+    .condition("age >= :min_age AND active = :is_active")
+    .value(":val", Value::Bool(true))
+    .value(":min_age", Value::number(18))
+    .value(":is_active", Value::Bool(true));
+
+let response = db.update(update)?;
+```
+
 ### Using condition expressions (Phase 2.3+)
 
 ```rust
@@ -800,8 +942,33 @@ Currently hardcoded at 1000 records (`MEMTABLE_THRESHOLD` in lsm.rs). When memta
 - New tests: test_parse_*, test_attribute_*, test_and_operator, test_begins_with
 - All tests passing (94 core + 16 API = 110 tests + 6 integration = 116 total)
 
-*Phase 2.4 Update Operations - TODO*
-*Phase 2.5 Conditional Operations - TODO*
+*Phase 2.4 Update Operations - COMPLETE ✅*
+- Update expression AST with actions: SET, REMOVE, ADD, DELETE
+- UpdateValue enum supporting paths, placeholders, and arithmetic (path + value, path - value)
+- Update expression parser (text → actions)
+- UpdateExecutor applies actions to items
+- LSM update() method: get → apply → put
+- Update builder API: `Update::new(pk).expression("SET age = :val").value(":val", ...)`
+- SET action for setting attributes or incrementing (SET x = x + :inc)
+- REMOVE action for deleting attributes
+- ADD action for adding to numbers
+- Extended expression.rs with update functionality
+- New module: update.rs (API)
+- New tests: test_update_*, test_database_update_*
+- All tests passing (99 core + 22 API = 121 tests + 6 integration = 127 total)
+
+*Phase 2.5 Conditional Operations - COMPLETE ✅*
+- ConditionalCheckFailed error type
+- Conditional put: put_conditional(), put_conditional_with_sk()
+- Conditional update: update_conditional() in LSM, Update.condition() in API
+- Conditional delete: delete_conditional(), delete_conditional_with_sk()
+- Condition evaluation before write operations (get → evaluate → write)
+- Common patterns: attribute_not_exists() for put-if-not-exists, attribute_exists() for update-if-exists
+- Update builder condition support: `.condition("age = :old_age")`
+- Failed conditions return ConditionalCheckFailed error
+- New tests: test_database_put_if_not_exists, test_database_update_with_condition, test_database_delete_with_condition, test_database_conditional_attribute_exists
+- All tests passing (99 core + 27 API = 126 tests + 6 integration = 132 total)
+
 *Phase 2.6 Batch Operations - TODO*
 *Phase 2.7 Transactions - TODO*
 

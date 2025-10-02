@@ -1,16 +1,15 @@
-/// Expression system for DynamoDB-style condition expressions
+/// Expression system for DynamoDB-style condition and update expressions
 ///
 /// Supports:
-/// - Comparison operators: =, <>, <, <=, >, >=
-/// - Logical operators: AND, OR, NOT
-/// - Functions: attribute_exists(), attribute_not_exists(), begins_with()
+/// - **Condition expressions**: =, <>, <, <=, >, >=, AND, OR, NOT, functions
+/// - **Update expressions**: SET, REMOVE, ADD, DELETE actions
 /// - Attribute paths and value placeholders
 ///
-/// # Examples
+/// # Condition Expression Examples
 ///
 /// ```ignore
 /// // Parse: age > :min_age AND active = :is_active
-/// let expr = ExpressionParser::parse("age > :min_age AND active = :is_active")?;
+/// let expr = ConditionExpressionParser::parse("age > :min_age AND active = :is_active")?;
 ///
 /// // Evaluate with context
 /// let context = ExpressionContext::new()
@@ -19,6 +18,19 @@
 ///
 /// let evaluator = ExpressionEvaluator::new(&item, &context);
 /// let result = evaluator.evaluate(&expr)?;
+/// ```
+///
+/// # Update Expression Examples
+///
+/// ```ignore
+/// // Parse: SET age = age + :inc, active = :val REMOVE temp
+/// let actions = UpdateExpressionParser::parse("SET age = age + :inc REMOVE temp")?;
+///
+/// let context = ExpressionContext::new()
+///     .with_value(":inc", Value::number(1));
+///
+/// let executor = UpdateExecutor::new(&context);
+/// let updated_item = executor.execute(&item, &actions)?;
 /// ```
 
 use crate::{Item, Value, Error, Result};
@@ -202,6 +214,147 @@ impl<'a> ExpressionEvaluator<'a> {
     }
 }
 
+/// Update expression actions
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpdateAction {
+    /// SET path = value (or SET path = path + value for increment)
+    Set(String, UpdateValue),
+    /// REMOVE path
+    Remove(String),
+    /// ADD path value (for numbers or sets)
+    Add(String, UpdateValue),
+    /// DELETE path value (for sets)
+    Delete(String, UpdateValue),
+}
+
+/// Value in update expression (can be literal, placeholder, or arithmetic)
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpdateValue {
+    /// Direct value (from placeholder or literal)
+    Value(Value),
+    /// Placeholder to be resolved
+    Placeholder(String),
+    /// Attribute path reference
+    Path(String),
+    /// Arithmetic: path + value or path - value
+    Add(String, Box<UpdateValue>),
+    Sub(String, Box<UpdateValue>),
+}
+
+/// Update executor
+pub struct UpdateExecutor<'a> {
+    context: &'a ExpressionContext,
+}
+
+impl<'a> UpdateExecutor<'a> {
+    pub fn new(context: &'a ExpressionContext) -> Self {
+        Self { context }
+    }
+
+    /// Execute update actions on an item
+    pub fn execute(&self, item: &Item, actions: &[UpdateAction]) -> Result<Item> {
+        let mut result = item.clone();
+
+        for action in actions {
+            match action {
+                UpdateAction::Set(path, value) => {
+                    let attr_name = self.resolve_attribute_name(path);
+                    let resolved_value = self.resolve_update_value(value, &result)?;
+                    result.insert(attr_name, resolved_value);
+                }
+                UpdateAction::Remove(path) => {
+                    let attr_name = self.resolve_attribute_name(path);
+                    result.remove(&attr_name);
+                }
+                UpdateAction::Add(path, value) => {
+                    let attr_name = self.resolve_attribute_name(path);
+                    let add_value = self.resolve_update_value(value, &result)?;
+
+                    if let Some(existing) = result.get(&attr_name) {
+                        // Add to existing number
+                        match (existing, &add_value) {
+                            (Value::N(n1), Value::N(n2)) => {
+                                let num1: f64 = n1.parse().map_err(|_| Error::InvalidExpression("Invalid number".into()))?;
+                                let num2: f64 = n2.parse().map_err(|_| Error::InvalidExpression("Invalid number".into()))?;
+                                result.insert(attr_name, Value::number(num1 + num2));
+                            }
+                            _ => return Err(Error::InvalidExpression("ADD requires numbers".into()))
+                        }
+                    } else {
+                        // Initialize with value
+                        result.insert(attr_name, add_value);
+                    }
+                }
+                UpdateAction::Delete(_path, _value) => {
+                    // DELETE is for sets - not implementing full set support in this phase
+                    return Err(Error::InvalidExpression("DELETE action not yet supported".into()));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn resolve_update_value(&self, value: &UpdateValue, item: &Item) -> Result<Value> {
+        match value {
+            UpdateValue::Value(v) => Ok(v.clone()),
+            UpdateValue::Placeholder(placeholder) => {
+                self.context.values.get(placeholder)
+                    .cloned()
+                    .ok_or_else(|| Error::InvalidExpression(format!("Placeholder {} not found", placeholder)))
+            }
+            UpdateValue::Path(path) => {
+                let attr_name = self.resolve_attribute_name(path);
+                item.get(&attr_name)
+                    .cloned()
+                    .ok_or_else(|| Error::InvalidExpression(format!("Attribute {} not found", attr_name)))
+            }
+            UpdateValue::Add(path, val) => {
+                let attr_name = self.resolve_attribute_name(path);
+                let base = item.get(&attr_name)
+                    .cloned()
+                    .ok_or_else(|| Error::InvalidExpression(format!("Attribute {} not found", attr_name)))?;
+                let increment = self.resolve_update_value(val, item)?;
+
+                match (&base, &increment) {
+                    (Value::N(n1), Value::N(n2)) => {
+                        let num1: f64 = n1.parse().map_err(|_| Error::InvalidExpression("Invalid number".into()))?;
+                        let num2: f64 = n2.parse().map_err(|_| Error::InvalidExpression("Invalid number".into()))?;
+                        Ok(Value::number(num1 + num2))
+                    }
+                    _ => Err(Error::InvalidExpression("Addition requires numbers".into()))
+                }
+            }
+            UpdateValue::Sub(path, val) => {
+                let attr_name = self.resolve_attribute_name(path);
+                let base = item.get(&attr_name)
+                    .cloned()
+                    .ok_or_else(|| Error::InvalidExpression(format!("Attribute {} not found", attr_name)))?;
+                let decrement = self.resolve_update_value(val, item)?;
+
+                match (&base, &decrement) {
+                    (Value::N(n1), Value::N(n2)) => {
+                        let num1: f64 = n1.parse().map_err(|_| Error::InvalidExpression("Invalid number".into()))?;
+                        let num2: f64 = n2.parse().map_err(|_| Error::InvalidExpression("Invalid number".into()))?;
+                        Ok(Value::number(num1 - num2))
+                    }
+                    _ => Err(Error::InvalidExpression("Subtraction requires numbers".into()))
+                }
+            }
+        }
+    }
+
+    fn resolve_attribute_name(&self, path: &str) -> String {
+        if path.starts_with('#') {
+            self.context.names.get(path)
+                .cloned()
+                .unwrap_or_else(|| path.to_string())
+        } else {
+            path.to_string()
+        }
+    }
+}
+
 /// Token for lexer
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
@@ -217,6 +370,16 @@ enum Token {
     And,
     Or,
     Not,
+
+    // Update keywords
+    Set,
+    Remove,
+    Add,
+    Delete,
+
+    // Arithmetic
+    Plus,
+    Minus,
 
     // Functions
     AttributeExists,
@@ -297,6 +460,14 @@ impl Lexer {
                 self.advance();
                 Ok(Token::Comma)
             }
+            Some('+') => {
+                self.advance();
+                Ok(Token::Plus)
+            }
+            Some('-') => {
+                self.advance();
+                Ok(Token::Minus)
+            }
             Some('=') => {
                 self.advance();
                 Ok(Token::Equal)
@@ -338,6 +509,10 @@ impl Lexer {
                     "AND" => Ok(Token::And),
                     "OR" => Ok(Token::Or),
                     "NOT" => Ok(Token::Not),
+                    "SET" => Ok(Token::Set),
+                    "REMOVE" => Ok(Token::Remove),
+                    "ADD" => Ok(Token::Add),
+                    "DELETE" => Ok(Token::Delete),
                     "ATTRIBUTE_EXISTS" => Ok(Token::AttributeExists),
                     "ATTRIBUTE_NOT_EXISTS" => Ok(Token::AttributeNotExists),
                     "BEGINS_WITH" => Ok(Token::BeginsWith),
@@ -526,6 +701,214 @@ impl ExpressionParser {
     }
 }
 
+/// Update expression parser
+pub struct UpdateExpressionParser {
+    tokens: Vec<Token>,
+    pos: usize,
+}
+
+impl UpdateExpressionParser {
+    /// Parse an update expression string into actions
+    /// Example: "SET age = age + :inc, active = :val REMOVE temp ADD score :points"
+    pub fn parse(input: &str) -> Result<Vec<UpdateAction>> {
+        let mut lexer = Lexer::new(input);
+        let mut tokens = Vec::new();
+
+        loop {
+            let token = lexer.next_token()?;
+            let is_eof = token == Token::Eof;
+            tokens.push(token);
+            if is_eof {
+                break;
+            }
+        }
+
+        let mut parser = Self { tokens, pos: 0 };
+        parser.parse_update_expr()
+    }
+
+    fn current(&self) -> &Token {
+        self.tokens.get(self.pos).unwrap_or(&Token::Eof)
+    }
+
+    fn advance(&mut self) {
+        self.pos += 1;
+    }
+
+    fn parse_update_expr(&mut self) -> Result<Vec<UpdateAction>> {
+        let mut actions = Vec::new();
+
+        while self.current() != &Token::Eof {
+            match self.current() {
+                Token::Set => {
+                    self.advance();
+                    actions.extend(self.parse_set_actions()?);
+                }
+                Token::Remove => {
+                    self.advance();
+                    actions.extend(self.parse_remove_actions()?);
+                }
+                Token::Add => {
+                    self.advance();
+                    actions.extend(self.parse_add_actions()?);
+                }
+                Token::Delete => {
+                    self.advance();
+                    actions.extend(self.parse_delete_actions()?);
+                }
+                _ => return Err(Error::InvalidExpression(format!("Unexpected token in update expression: {:?}", self.current())))
+            }
+        }
+
+        Ok(actions)
+    }
+
+    fn parse_set_actions(&mut self) -> Result<Vec<UpdateAction>> {
+        let mut actions = Vec::new();
+
+        loop {
+            // Get attribute path
+            let path = match self.current() {
+                Token::Identifier(p) => p.clone(),
+                Token::NamePlaceholder(p) => p.clone(),
+                _ => return Err(Error::InvalidExpression("Expected attribute path in SET".into()))
+            };
+            self.advance();
+
+            // Expect =
+            if self.current() != &Token::Equal {
+                return Err(Error::InvalidExpression("Expected = in SET action".into()));
+            }
+            self.advance();
+
+            // Parse value (could be path, placeholder, or arithmetic)
+            let value = self.parse_update_value()?;
+
+            actions.push(UpdateAction::Set(path, value));
+
+            // Check for comma (more SET actions) or end
+            if self.current() == &Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        Ok(actions)
+    }
+
+    fn parse_remove_actions(&mut self) -> Result<Vec<UpdateAction>> {
+        let mut actions = Vec::new();
+
+        loop {
+            let path = match self.current() {
+                Token::Identifier(p) => p.clone(),
+                Token::NamePlaceholder(p) => p.clone(),
+                _ => return Err(Error::InvalidExpression("Expected attribute path in REMOVE".into()))
+            };
+            self.advance();
+
+            actions.push(UpdateAction::Remove(path));
+
+            if self.current() == &Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        Ok(actions)
+    }
+
+    fn parse_add_actions(&mut self) -> Result<Vec<UpdateAction>> {
+        let mut actions = Vec::new();
+
+        loop {
+            let path = match self.current() {
+                Token::Identifier(p) => p.clone(),
+                Token::NamePlaceholder(p) => p.clone(),
+                _ => return Err(Error::InvalidExpression("Expected attribute path in ADD".into()))
+            };
+            self.advance();
+
+            let value = self.parse_update_value()?;
+
+            actions.push(UpdateAction::Add(path, value));
+
+            if self.current() == &Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        Ok(actions)
+    }
+
+    fn parse_delete_actions(&mut self) -> Result<Vec<UpdateAction>> {
+        let mut actions = Vec::new();
+
+        loop {
+            let path = match self.current() {
+                Token::Identifier(p) => p.clone(),
+                Token::NamePlaceholder(p) => p.clone(),
+                _ => return Err(Error::InvalidExpression("Expected attribute path in DELETE".into()))
+            };
+            self.advance();
+
+            let value = self.parse_update_value()?;
+
+            actions.push(UpdateAction::Delete(path, value));
+
+            if self.current() == &Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        Ok(actions)
+    }
+
+    fn parse_update_value(&mut self) -> Result<UpdateValue> {
+        // First, get the base value (path or placeholder)
+        let base = match self.current() {
+            Token::Identifier(p) => {
+                let path = p.clone();
+                self.advance();
+
+                // Check for arithmetic
+                match self.current() {
+                    Token::Plus => {
+                        self.advance();
+                        let operand = self.parse_update_value()?;
+                        return Ok(UpdateValue::Add(path, Box::new(operand)));
+                    }
+                    Token::Minus => {
+                        self.advance();
+                        let operand = self.parse_update_value()?;
+                        return Ok(UpdateValue::Sub(path, Box::new(operand)));
+                    }
+                    _ => UpdateValue::Path(path)
+                }
+            }
+            Token::NamePlaceholder(p) => {
+                let path = p.clone();
+                self.advance();
+                UpdateValue::Path(path)
+            }
+            Token::ValuePlaceholder(p) => {
+                let placeholder = p.clone();
+                self.advance();
+                UpdateValue::Placeholder(placeholder)
+            }
+            _ => return Err(Error::InvalidExpression(format!("Unexpected token in update value: {:?}", self.current())))
+        };
+
+        Ok(base)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,5 +1090,111 @@ mod tests {
 
         let evaluator = ExpressionEvaluator::new(&item, &context);
         assert!(evaluator.evaluate(&expr).unwrap());
+    }
+
+    // Update expression tests
+    #[test]
+    fn test_update_set_simple() {
+        let mut item = HashMap::new();
+        item.insert("age".to_string(), Value::number(25));
+
+        let actions = UpdateExpressionParser::parse("SET age = :new_age").unwrap();
+        assert_eq!(actions.len(), 1);
+
+        let context = ExpressionContext::new()
+            .with_value(":new_age", Value::number(30));
+
+        let executor = UpdateExecutor::new(&context);
+        let result = executor.execute(&item, &actions).unwrap();
+
+        match result.get("age").unwrap() {
+            Value::N(n) => assert_eq!(n, "30"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_update_set_increment() {
+        let mut item = HashMap::new();
+        item.insert("score".to_string(), Value::number(100));
+
+        let actions = UpdateExpressionParser::parse("SET score = score + :inc").unwrap();
+
+        let context = ExpressionContext::new()
+            .with_value(":inc", Value::number(50));
+
+        let executor = UpdateExecutor::new(&context);
+        let result = executor.execute(&item, &actions).unwrap();
+
+        match result.get("score").unwrap() {
+            Value::N(n) => assert_eq!(n, "150"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_update_remove() {
+        let mut item = HashMap::new();
+        item.insert("temp".to_string(), Value::string("delete_me"));
+        item.insert("keep".to_string(), Value::string("keep_me"));
+
+        let actions = UpdateExpressionParser::parse("REMOVE temp").unwrap();
+
+        let context = ExpressionContext::new();
+        let executor = UpdateExecutor::new(&context);
+        let result = executor.execute(&item, &actions).unwrap();
+
+        assert!(!result.contains_key("temp"));
+        assert!(result.contains_key("keep"));
+    }
+
+    #[test]
+    fn test_update_add() {
+        let mut item = HashMap::new();
+        item.insert("count".to_string(), Value::number(10));
+
+        let actions = UpdateExpressionParser::parse("ADD count :inc").unwrap();
+
+        let context = ExpressionContext::new()
+            .with_value(":inc", Value::number(5));
+
+        let executor = UpdateExecutor::new(&context);
+        let result = executor.execute(&item, &actions).unwrap();
+
+        match result.get("count").unwrap() {
+            Value::N(n) => assert_eq!(n, "15"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_update_multiple_actions() {
+        let mut item = HashMap::new();
+        item.insert("age".to_string(), Value::number(25));
+        item.insert("temp".to_string(), Value::string("delete"));
+        item.insert("score".to_string(), Value::number(100));
+
+        let actions = UpdateExpressionParser::parse(
+            "SET age = :new_age, active = :is_active REMOVE temp ADD score :bonus"
+        ).unwrap();
+
+        let context = ExpressionContext::new()
+            .with_value(":new_age", Value::number(26))
+            .with_value(":is_active", Value::Bool(true))
+            .with_value(":bonus", Value::number(50));
+
+        let executor = UpdateExecutor::new(&context);
+        let result = executor.execute(&item, &actions).unwrap();
+
+        match result.get("age").unwrap() {
+            Value::N(n) => assert_eq!(n, "26"),
+            _ => panic!("Expected number"),
+        }
+        assert_eq!(result.get("active").unwrap(), &Value::Bool(true));
+        assert!(!result.contains_key("temp"));
+        match result.get("score").unwrap() {
+            Value::N(n) => assert_eq!(n, "150"),
+            _ => panic!("Expected number"),
+        }
     }
 }
