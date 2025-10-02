@@ -1,0 +1,340 @@
+syntax = "proto3";
+
+package keystone;
+
+// Main KeystoneDB service
+service KeystoneDB {
+  // Basic operations
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Query and scan
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc Scan(ScanRequest) returns (stream ScanResponse);
+
+  // Batch operations
+  rpc BatchGet(BatchGetRequest) returns (BatchGetResponse);
+  rpc BatchWrite(BatchWriteRequest) returns (BatchWriteResponse);
+
+  // Transactions
+  rpc TransactGet(TransactGetRequest) returns (TransactGetResponse);
+  rpc TransactWrite(TransactWriteRequest) returns (TransactWriteResponse);
+
+  // Update
+  rpc Update(UpdateRequest) returns (UpdateResponse);
+
+  // PartiQL
+  rpc ExecuteStatement(ExecuteStatementRequest) returns (ExecuteStatementResponse);
+}
+
+// ============================================================================
+// Common Types
+// ============================================================================
+
+message Key {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+}
+
+message Value {
+  oneof value {
+    string string_value = 1;
+    string number_value = 2;
+    bytes binary_value = 3;
+    bool bool_value = 4;
+    NullValue null_value = 5;
+    ListValue list_value = 6;
+    MapValue map_value = 7;
+    VectorValue vector_value = 8;
+    uint64 timestamp_value = 9;
+  }
+}
+
+enum NullValue {
+  NULL_VALUE = 0;
+}
+
+message ListValue {
+  repeated Value items = 1;
+}
+
+message MapValue {
+  map<string, Value> fields = 1;
+}
+
+message VectorValue {
+  repeated float values = 1;
+}
+
+message Item {
+  map<string, Value> attributes = 1;
+}
+
+message LastKey {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+}
+
+// ============================================================================
+// Put Operation
+// ============================================================================
+
+message PutRequest {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  Item item = 3;
+  optional string condition_expression = 4;
+}
+
+message PutResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+// ============================================================================
+// Get Operation
+// ============================================================================
+
+message GetRequest {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+}
+
+message GetResponse {
+  optional Item item = 1;
+  optional string error = 2;
+}
+
+// ============================================================================
+// Delete Operation
+// ============================================================================
+
+message DeleteRequest {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  optional string condition_expression = 3;
+}
+
+message DeleteResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+// ============================================================================
+// Query Operation
+// ============================================================================
+
+message QueryRequest {
+  bytes partition_key = 1;
+  optional SortKeyCondition sort_key_condition = 2;
+  optional string filter_expression = 3;
+  map<string, Value> expression_values = 4;
+  optional string index_name = 5;
+  optional uint32 limit = 6;
+  optional LastKey exclusive_start_key = 7;
+  optional bool scan_forward = 8;
+}
+
+message SortKeyCondition {
+  oneof condition {
+    Value equal_to = 1;
+    BetweenCondition between = 2;
+    Value less_than = 3;
+    Value less_than_or_equal = 4;
+    Value greater_than = 5;
+    Value greater_than_or_equal = 6;
+    Value begins_with = 7;
+  }
+}
+
+message BetweenCondition {
+  Value lower = 1;
+  Value upper = 2;
+}
+
+message QueryResponse {
+  repeated Item items = 1;
+  uint32 count = 2;
+  uint32 scanned_count = 3;
+  optional LastKey last_evaluated_key = 4;
+  optional string error = 5;
+}
+
+// ============================================================================
+// Scan Operation
+// ============================================================================
+
+message ScanRequest {
+  optional string filter_expression = 1;
+  map<string, Value> expression_values = 2;
+  optional uint32 limit = 3;
+  optional LastKey exclusive_start_key = 4;
+  optional string index_name = 5;
+  optional uint32 segment = 6;
+  optional uint32 total_segments = 7;
+}
+
+message ScanResponse {
+  repeated Item items = 1;
+  uint32 count = 2;
+  uint32 scanned_count = 3;
+  optional LastKey last_evaluated_key = 4;
+  optional string error = 5;
+}
+
+// ============================================================================
+// Batch Operations
+// ============================================================================
+
+message BatchGetRequest {
+  repeated Key keys = 1;
+}
+
+message BatchGetResponse {
+  repeated Item items = 1;
+  uint32 count = 2;
+  optional string error = 3;
+}
+
+message BatchWriteRequest {
+  repeated WriteRequest writes = 1;
+}
+
+message WriteRequest {
+  oneof request {
+    PutItem put = 1;
+    DeleteKey delete = 2;
+  }
+}
+
+message PutItem {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  Item item = 3;
+}
+
+message DeleteKey {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+}
+
+message BatchWriteResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+// ============================================================================
+// Transaction Operations
+// ============================================================================
+
+message TransactGetRequest {
+  repeated Key keys = 1;
+}
+
+message TransactGetResponse {
+  repeated TransactGetItem items = 1;
+  optional string error = 2;
+}
+
+message TransactGetItem {
+  optional Item item = 1;
+}
+
+message TransactWriteRequest {
+  repeated TransactWriteItem items = 1;
+}
+
+message TransactWriteItem {
+  oneof item {
+    TransactPut put = 1;
+    TransactUpdate update = 2;
+    TransactDelete delete = 3;
+    ConditionCheck condition_check = 4;
+  }
+}
+
+message TransactPut {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  Item item = 3;
+  optional string condition_expression = 4;
+}
+
+message TransactUpdate {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  string update_expression = 3;
+  optional string condition_expression = 4;
+}
+
+message TransactDelete {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  optional string condition_expression = 3;
+}
+
+message ConditionCheck {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  string condition_expression = 3;
+}
+
+message TransactWriteResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+// ============================================================================
+// Update Operation
+// ============================================================================
+
+message UpdateRequest {
+  bytes partition_key = 1;
+  optional bytes sort_key = 2;
+  string update_expression = 3;
+  optional string condition_expression = 4;
+  map<string, Value> expression_values = 5;
+}
+
+message UpdateResponse {
+  Item item = 1;
+  optional string error = 2;
+}
+
+// ============================================================================
+// PartiQL ExecuteStatement
+// ============================================================================
+
+message ExecuteStatementRequest {
+  string statement = 1;
+}
+
+message ExecuteStatementResponse {
+  oneof response {
+    SelectResult select = 1;
+    InsertResult insert = 2;
+    UpdateResult update = 3;
+    DeleteResult delete = 4;
+  }
+  optional string error = 5;
+}
+
+message SelectResult {
+  repeated Item items = 1;
+  uint32 count = 2;
+  uint32 scanned_count = 3;
+  optional LastKey last_key = 4;
+}
+
+message InsertResult {
+  bool success = 1;
+}
+
+message UpdateResult {
+  Item item = 1;
+}
+
+message DeleteResult {
+  bool success = 1;
+}

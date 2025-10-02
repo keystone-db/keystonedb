@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. **Phase 3 (Indexes) is COMPLETE** with full support for LSI, GSI, TTL, and Streams.
+KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. **Phase 6 (Network Layer & gRPC Server) is COMPLETE** - the database now supports remote access via gRPC in addition to embedded usage. Previous phases (0-3) are complete: storage engine, DynamoDB API, and full index support (LSI, GSI, TTL, Streams).
 
 **Target:** Eventually a full Dynamo-model database with cloud sync, FTS/vector indexes, and attachment to DynamoDB or remote KeystoneDB instances.
 
@@ -56,13 +56,29 @@ kstone get <path> <key>
 kstone delete <path> <key>
 ```
 
+### Server Usage
+```bash
+# Start gRPC server
+cargo run --bin kstone-server -- --db-path <path> --port 50051
+
+# Or after building:
+./target/release/kstone-server --db-path <path> --port 50051
+
+# Server options:
+#   --db-path, -d <PATH>    Path to database directory (required)
+#   --port, -p <PORT>       Port to listen on (default: 50051)
+#   --host <HOST>           Host to bind to (default: 127.0.0.1)
+```
+
 ## Architecture
 
 ### Workspace Structure
-This is a Cargo workspace with 4 crates:
+This is a Cargo workspace with 6 crates:
 - **kstone-core**: Storage engine internals (WAL, SST, LSM)
 - **kstone-api**: Public API wrapping the core engine
-- **kstone-cli**: Command-line binary
+- **kstone-proto**: Protocol Buffers definitions for gRPC
+- **kstone-server**: gRPC server implementation
+- **kstone-cli**: Command-line binary for local database access
 - **kstone-tests**: Integration tests
 
 ### Core Modules (kstone-core)
@@ -1387,6 +1403,50 @@ Currently hardcoded at 1000 records (`MEMTABLE_THRESHOLD` in lsm.rs). When memta
 3. Determines next SeqNo from max in WAL
 4. Ready for operations
 
+## gRPC Server (Phase 6)
+
+### Protocol Definition (kstone-proto)
+
+The server uses Protocol Buffers (proto3) to define the gRPC service interface:
+
+- **Service**: `KeystoneDb` with 11 RPC methods
+- **Methods Implemented**:
+  - `Put`, `Get`, `Delete` - Basic CRUD operations
+  - `Query` - Query items by partition key with sort key conditions
+  - `Scan` - Server-side streaming scan of all items
+  - `BatchGet`, `BatchWrite` - Batch operations
+- **Methods Stubbed** (return `UNIMPLEMENTED`):
+  - `TransactGet`, `TransactWrite` - Transactional operations
+  - `Update` - Update expressions
+  - `ExecuteStatement` - PartiQL queries
+
+### Server Implementation (kstone-server)
+
+**Architecture**:
+- `service.rs`: Implements the `KeystoneDb` gRPC trait
+- `convert.rs`: Bidirectional type conversions between protobuf and KeystoneDB types
+- `bin/kstone-server.rs`: Server binary with CLI
+
+**Key Patterns**:
+- `Arc<Database>` for thread-safe sharing across async tasks
+- `tokio::task::spawn_blocking` to bridge async gRPC handlers with synchronous Database API
+- Comprehensive error mapping from `kstone_core::Error` to gRPC `Status` codes
+
+**Error Mapping**:
+```rust
+NotFound → NOT_FOUND
+InvalidQuery/InvalidArgument → INVALID_ARGUMENT
+ConditionalCheckFailed → FAILED_PRECONDITION
+Io/Corruption → INTERNAL/DATA_LOSS
+TransactionCanceled → ABORTED
+```
+
+**Type Conversions**:
+Due to Rust's orphan rules, we use conversion functions instead of trait implementations:
+- `proto_value_to_ks()` / `ks_value_to_proto()`
+- `proto_item_to_ks()` / `ks_item_to_proto()`
+- `proto_key_to_ks()` / `ks_key_to_proto()`
+
 ## Development Status
 
 **Phase 0 (Walking Skeleton) - COMPLETE ✅**
@@ -1712,36 +1772,58 @@ let result = db.get(b"user#123")?;
 db.snapshot_to_disk("backup.keystone")?;
 ```
 
-**Phase 6: Interactive CLI**
+**Phase 6: Network Layer & gRPC Server - COMPLETE ✅**
+
+*Phase 6.1 Protocol Definition - COMPLETE ✅*
+- Protocol Buffers (proto3) service definition
+- 11 RPC methods: Put, Get, Delete, Query, Scan, BatchGet, BatchWrite, TransactGet, TransactWrite, Update, ExecuteStatement
+- Bidirectional type conversions (kstone-proto crate)
+- All value types supported (S, N, B, Bool, Null, L, M, VecF32, Ts)
+
+*Phase 6.2 Server Implementation - COMPLETE ✅*
+- gRPC service implementation (kstone-server crate)
+- Put/Get/Delete fully implemented
+- Query with sort key conditions (eq, lt, lte, gt, gte, between, begins_with)
+- Scan with server-side streaming and parallel segments
+- BatchGet/BatchWrite operations
+- Error mapping from KeystoneDB to gRPC Status codes
+- Server binary with CLI (`kstone-server --db-path <path> --port 50051`)
+
+*Phase 6.3 Stubbed Methods*
+- TransactGet/TransactWrite return UNIMPLEMENTED (requires transaction coordinator)
+- Update returns UNIMPLEMENTED (requires update expression parsing)
+- ExecuteStatement returns UNIMPLEMENTED (requires PartiQL parser)
+
+**Phase 7: Interactive CLI (Not Yet Implemented)**
 REPL-style interactive query editor with autocomplete.
 
-*Phase 6.1 REPL Infrastructure*
+*Phase 7.1 REPL Infrastructure*
 - Add rustyline or reedline dependency for line editing
 - `kstone shell <path>` command to enter interactive mode
 - Prompt with database info (path, table schema)
 - Graceful exit with Ctrl+D or `.exit` command
 
-*Phase 6.2 Autocomplete Engine*
+*Phase 7.2 Autocomplete Engine*
 - Context-aware tab completion
 - PartiQL keyword completion (SELECT, FROM, WHERE, INSERT, UPDATE, DELETE)
 - Table attribute name completion (from schema inspection)
 - Index name completion (LSI/GSI names)
 - Function name completion (attribute_exists, begins_with, etc.)
 
-*Phase 6.3 Query History*
+*Phase 7.3 Query History*
 - Persistent command history across sessions
 - Up/down arrow navigation through history
 - Ctrl+R reverse search in history
 - `.history` command to show recent queries
 
-*Phase 6.4 Result Formatting*
+*Phase 7.4 Result Formatting*
 - Pretty-print query results in table format
 - JSON output mode (`.format json`)
 - Compact mode for large result sets
 - Color-coded output (optional, with termcolor)
 - Item count and timing statistics
 
-*Phase 6.5 Multi-line Support*
+*Phase 7.5 Multi-line Support*
 - Detect incomplete PartiQL queries
 - Continue prompt for multi-line input
 - Semicolon terminates query
@@ -1788,7 +1870,7 @@ Goodbye!
 - `.timer <on|off>` - Show/hide query timing
 - `.exit` or `.quit` - Exit shell
 
-**Phase 7+: Attachment Framework**
+**Phase 8+: Attachment Framework**
 - DynamoDB sync (bidirectional replication)
 - Remote KeystoneDB sync (peer-to-peer replication)
 - Cloud integration and sync strategies
