@@ -2,7 +2,7 @@ use crate::{Error, Result, Record, Key};
 use bytes::{Bytes, BytesMut, BufMut};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const SST_HEADER_SIZE: usize = 16;
 const SST_MAGIC: u32 = 0x53535400; // "SST\0"
@@ -69,11 +69,12 @@ impl SstWriter {
 
 pub struct SstReader {
     records: Vec<Record>,
+    path: PathBuf,
 }
 
 impl SstReader {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let mut file = File::open(path)?;
+        let mut file = File::open(&path)?;
 
         // Read header
         let mut header = [0u8; SST_HEADER_SIZE];
@@ -137,7 +138,10 @@ impl SstReader {
             )));
         }
 
-        Ok(Self { records })
+        Ok(Self {
+            records,
+            path: path.as_ref().to_path_buf(),
+        })
     }
 
     /// Get a record by exact key match
@@ -159,6 +163,16 @@ impl SstReader {
         self.records
             .iter()
             .filter(move |rec| rec.key.pk == *pk)
+    }
+
+    /// Get the path to this SST file
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Scan all records (returns owned records for compaction)
+    pub fn scan(&self) -> Result<impl Iterator<Item = Record> + '_> {
+        Ok(self.records.iter().cloned())
     }
 }
 

@@ -9,6 +9,7 @@ pub mod wal;
 pub mod wal_ring; // Phase 1.3+ ring buffer WAL
 pub mod sst;
 pub mod sst_block; // Phase 1.4+ block-based SST
+pub mod compaction; // Phase 5+ background compaction
 pub mod manifest; // Phase 1.5+ metadata catalog
 pub mod lsm;
 pub mod iterator; // Phase 2.1+ query/scan support
