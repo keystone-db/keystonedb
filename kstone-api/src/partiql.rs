@@ -153,6 +153,10 @@ impl Database {
                             }
                         }
 
+                        // Apply projection
+                        response.items = apply_projection(response.items, &select_stmt.select_list);
+                        response.count = response.items.len();
+
                         Ok(ExecuteStatementResponse::Select {
                             items: response.items,
                             count: response.count,
@@ -192,6 +196,9 @@ impl Database {
                             all_items.truncate(limit);
                         }
 
+                        // Apply projection
+                        all_items = apply_projection(all_items, &select_stmt.select_list);
+
                         Ok(ExecuteStatementResponse::Select {
                             count: all_items.len(),
                             scanned_count: total_scanned,
@@ -213,11 +220,13 @@ impl Database {
                             scan = scan.limit(fetch_limit);
                         }
 
-                        // TODO: Apply filter conditions when scan supports filtering
-                        // For now, we'll just execute the scan
-                        let _ = filter_conditions; // Suppress unused warning
-
                         let mut response = self.scan(scan)?;
+
+                        // Apply filter conditions (WHERE clause filtering)
+                        if !filter_conditions.is_empty() {
+                            response.items = apply_filter_conditions(response.items, &filter_conditions);
+                            response.count = response.items.len();
+                        }
 
                         // Apply OFFSET if specified (by skipping items)
                         if let Some(offset) = select_stmt.offset {
@@ -238,6 +247,10 @@ impl Database {
                                 response.count = limit;
                             }
                         }
+
+                        // Apply projection
+                        response.items = apply_projection(response.items, &select_stmt.select_list);
+                        response.count = response.items.len();
 
                         Ok(ExecuteStatementResponse::Select {
                             items: response.items,
@@ -297,6 +310,132 @@ impl Database {
                 Ok(ExecuteStatementResponse::Delete { success: true })
             }
         }
+    }
+}
+
+/// Apply projection to filter items to only include selected attributes
+fn apply_projection(
+    items: Vec<Item>,
+    select_list: &kstone_core::partiql::SelectList,
+) -> Vec<Item> {
+    use kstone_core::partiql::SelectList;
+    use std::collections::HashMap;
+
+    match select_list {
+        SelectList::All => items,
+        SelectList::Attributes(attrs) => {
+            items
+                .into_iter()
+                .map(|item| {
+                    let mut projected = HashMap::new();
+                    for attr in attrs {
+                        if let Some(value) = item.get(attr) {
+                            projected.insert(attr.clone(), value.clone());
+                        }
+                    }
+                    projected
+                })
+                .collect()
+        }
+    }
+}
+
+/// Apply filter conditions to items (for Scan filtering)
+fn apply_filter_conditions(
+    items: Vec<Item>,
+    conditions: &[kstone_core::partiql::Condition],
+) -> Vec<Item> {
+    use kstone_core::partiql::CompareOp;
+
+    items
+        .into_iter()
+        .filter(|item| {
+            // Item must match ALL conditions (AND logic)
+            conditions.iter().all(|condition| {
+                // Get attribute value from item
+                let item_value = match item.get(&condition.attribute) {
+                    Some(v) => v,
+                    None => return false, // Attribute not present, doesn't match
+                };
+
+                // Compare based on operator
+                match &condition.operator {
+                    CompareOp::Equal => compare_values_eq(item_value, &condition.value),
+                    CompareOp::NotEqual => !compare_values_eq(item_value, &condition.value),
+                    CompareOp::LessThan => compare_values_lt(item_value, &condition.value),
+                    CompareOp::LessThanOrEqual => {
+                        compare_values_lt(item_value, &condition.value)
+                            || compare_values_eq(item_value, &condition.value)
+                    }
+                    CompareOp::GreaterThan => {
+                        !compare_values_lt(item_value, &condition.value)
+                            && !compare_values_eq(item_value, &condition.value)
+                    }
+                    CompareOp::GreaterThanOrEqual => {
+                        !compare_values_lt(item_value, &condition.value)
+                    }
+                    CompareOp::In => {
+                        // Check if item_value is in the list
+                        if let kstone_core::partiql::SqlValue::List(values) = &condition.value {
+                            values.iter().any(|v| compare_values_eq(item_value, v))
+                        } else {
+                            false
+                        }
+                    }
+                    CompareOp::Between => {
+                        // BETWEEN x AND y
+                        if let kstone_core::partiql::SqlValue::List(values) = &condition.value {
+                            if values.len() == 2 {
+                                let lower = &values[0];
+                                let upper = &values[1];
+                                (compare_values_eq(item_value, lower)
+                                    || !compare_values_lt(item_value, lower))
+                                    && (compare_values_eq(item_value, upper)
+                                        || compare_values_lt(item_value, upper))
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                }
+            })
+        })
+        .collect()
+}
+
+/// Compare two values for equality
+fn compare_values_eq(
+    item_value: &crate::Value,
+    sql_value: &kstone_core::partiql::SqlValue,
+) -> bool {
+    match (item_value, sql_value) {
+        (crate::Value::N(n1), kstone_core::partiql::SqlValue::Number(n2)) => n1 == n2,
+        (crate::Value::S(s1), kstone_core::partiql::SqlValue::String(s2)) => s1 == s2,
+        (crate::Value::Bool(b1), kstone_core::partiql::SqlValue::Boolean(b2)) => b1 == b2,
+        (crate::Value::Null, kstone_core::partiql::SqlValue::Null) => true,
+        _ => false,
+    }
+}
+
+/// Compare two values for less-than
+fn compare_values_lt(
+    item_value: &crate::Value,
+    sql_value: &kstone_core::partiql::SqlValue,
+) -> bool {
+    match (item_value, sql_value) {
+        (crate::Value::N(n1), kstone_core::partiql::SqlValue::Number(n2)) => {
+            // Parse as f64 for numeric comparison
+            if let (Ok(num1), Ok(num2)) = (n1.parse::<f64>(), n2.parse::<f64>()) {
+                num1 < num2
+            } else {
+                // Fallback to string comparison if parsing fails
+                n1 < n2
+            }
+        }
+        (crate::Value::S(s1), kstone_core::partiql::SqlValue::String(s2)) => s1 < s2,
+        _ => false,
     }
 }
 
@@ -600,6 +739,90 @@ mod tests {
             ExecuteStatementResponse::Select { items, count, .. } => {
                 assert_eq!(count, 5);
                 assert_eq!(items.len(), 5);
+            }
+            _ => panic!("Expected Select response"),
+        }
+    }
+
+    #[test]
+    fn test_execute_statement_select_with_projection() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert items with multiple attributes
+        for i in 0..5 {
+            db.put(
+                format!("user#{:03}", i).as_bytes(),
+                ItemBuilder::new()
+                    .string("name", format!("User{}", i))
+                    .number("age", 20 + i)
+                    .string("email", format!("user{}@example.com", i))
+                    .string("city", "New York")
+                    .build(),
+            )
+            .unwrap();
+        }
+
+        // SELECT with projection (only name and age)
+        let sql = "SELECT name, age FROM users WHERE pk = 'user#001'";
+        let response = db.execute_statement(sql).unwrap();
+
+        match response {
+            ExecuteStatementResponse::Select { items, count, .. } => {
+                assert_eq!(count, 1);
+                assert_eq!(items.len(), 1);
+
+                let item = &items[0];
+                // Should have name and age
+                assert!(item.contains_key("name"));
+                assert!(item.contains_key("age"));
+
+                // Should NOT have email and city
+                assert!(!item.contains_key("email"));
+                assert!(!item.contains_key("city"));
+
+                // Verify only 2 attributes present
+                assert_eq!(item.len(), 2);
+            }
+            _ => panic!("Expected Select response"),
+        }
+    }
+
+    #[test]
+    fn test_execute_statement_scan_with_filter() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert items with various ages
+        for i in 0..10 {
+            db.put(
+                format!("user#{:03}", i).as_bytes(),
+                ItemBuilder::new()
+                    .string("name", format!("User{}", i))
+                    .number("age", 20 + i)
+                    .build(),
+            )
+            .unwrap();
+        }
+
+        // Scan with filter: age > 25 (should match users with age 26, 27, 28, 29)
+        let sql = "SELECT * FROM users WHERE age > 25";
+        let response = db.execute_statement(sql).unwrap();
+
+        match response {
+            ExecuteStatementResponse::Select { items, count, .. } => {
+                assert_eq!(count, 4);
+                assert_eq!(items.len(), 4);
+
+                // Verify all returned items have age > 25
+                for item in items {
+                    if let Some(crate::Value::N(age_str)) = item.get("age") {
+                        let age: i32 = age_str.parse().unwrap();
+                        assert!(age > 25);
+                    } else {
+                        panic!("Expected age attribute");
+                    }
+                }
             }
             _ => panic!("Expected Select response"),
         }
