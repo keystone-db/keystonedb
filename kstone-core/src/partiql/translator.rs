@@ -163,9 +163,83 @@ impl PartiQLTranslator {
     }
 
     /// Translate UPDATE statement
-    pub fn translate_update(_stmt: &UpdateStatement) -> Result<UpdateTranslation> {
-        // TODO: Implement UPDATE translation
-        Err(Error::InvalidQuery("UPDATE translation not yet implemented".into()))
+    pub fn translate_update(stmt: &UpdateStatement) -> Result<UpdateTranslation> {
+        // Validate
+        DynamoDBValidator::validate_update(stmt)?;
+
+        // Extract key from WHERE clause
+        let pk_cond = stmt
+            .where_clause
+            .get_condition("pk")
+            .ok_or_else(|| Error::InvalidQuery("UPDATE must specify pk in WHERE clause".into()))?;
+        let pk_bytes = Self::value_to_bytes(&pk_cond.value)?;
+
+        let sk_bytes = stmt
+            .where_clause
+            .get_condition("sk")
+            .map(|c| Self::value_to_bytes(&c.value))
+            .transpose()?;
+
+        let key = if let Some(sk) = sk_bytes {
+            Key::with_sk(pk_bytes.to_vec(), sk.to_vec())
+        } else {
+            Key::new(pk_bytes.to_vec())
+        };
+
+        // Build UPDATE expression and values map
+        let mut expression_parts = Vec::new();
+        let mut values = std::collections::HashMap::new();
+        let mut value_counter = 1;
+
+        // Process SET assignments
+        if !stmt.set_assignments.is_empty() {
+            let mut set_exprs = Vec::new();
+            for assignment in &stmt.set_assignments {
+                match &assignment.value {
+                    SetValue::Literal(sql_value) => {
+                        // SET attr = :v1
+                        let placeholder = format!(":v{}", value_counter);
+                        set_exprs.push(format!("{} = {}", assignment.attribute, placeholder));
+                        values.insert(placeholder, sql_value.to_kstone_value());
+                        value_counter += 1;
+                    }
+                    SetValue::Add { attribute, value } => {
+                        // SET attr = attr + :v1
+                        let placeholder = format!(":v{}", value_counter);
+                        set_exprs.push(format!(
+                            "{} = {} + {}",
+                            assignment.attribute, attribute, placeholder
+                        ));
+                        values.insert(placeholder, value.to_kstone_value());
+                        value_counter += 1;
+                    }
+                    SetValue::Subtract { attribute, value } => {
+                        // SET attr = attr - :v1
+                        let placeholder = format!(":v{}", value_counter);
+                        set_exprs.push(format!(
+                            "{} = {} - {}",
+                            assignment.attribute, attribute, placeholder
+                        ));
+                        values.insert(placeholder, value.to_kstone_value());
+                        value_counter += 1;
+                    }
+                }
+            }
+            expression_parts.push(format!("SET {}", set_exprs.join(", ")));
+        }
+
+        // Process REMOVE attributes
+        if !stmt.remove_attributes.is_empty() {
+            expression_parts.push(format!("REMOVE {}", stmt.remove_attributes.join(", ")));
+        }
+
+        let expression = expression_parts.join(" ");
+
+        Ok(UpdateTranslation {
+            key,
+            expression,
+            values,
+        })
     }
 
     /// Translate DELETE statement
@@ -327,5 +401,124 @@ mod tests {
 
         let translation = PartiQLTranslator::translate_delete(&stmt).unwrap();
         assert_eq!(translation.key.pk.as_ref(), "user#123".as_bytes());
+    }
+
+    #[test]
+    fn test_translate_update_simple() {
+        let stmt = UpdateStatement {
+            table_name: "users".to_string(),
+            where_clause: WhereClause {
+                conditions: vec![Condition {
+                    attribute: "pk".to_string(),
+                    operator: CompareOp::Equal,
+                    value: SqlValue::String("user#123".to_string()),
+                }],
+            },
+            set_assignments: vec![
+                SetAssignment {
+                    attribute: "name".to_string(),
+                    value: SetValue::Literal(SqlValue::String("Alice".to_string())),
+                },
+                SetAssignment {
+                    attribute: "age".to_string(),
+                    value: SetValue::Literal(SqlValue::Number("30".to_string())),
+                },
+            ],
+            remove_attributes: vec![],
+        };
+
+        let translation = PartiQLTranslator::translate_update(&stmt).unwrap();
+        assert_eq!(translation.key.pk.as_ref(), "user#123".as_bytes());
+        assert!(translation.expression.contains("SET"));
+        assert_eq!(translation.values.len(), 2); // :v1 and :v2
+    }
+
+    #[test]
+    fn test_translate_update_with_arithmetic() {
+        let stmt = UpdateStatement {
+            table_name: "users".to_string(),
+            where_clause: WhereClause {
+                conditions: vec![Condition {
+                    attribute: "pk".to_string(),
+                    operator: CompareOp::Equal,
+                    value: SqlValue::String("user#123".to_string()),
+                }],
+            },
+            set_assignments: vec![
+                SetAssignment {
+                    attribute: "age".to_string(),
+                    value: SetValue::Add {
+                        attribute: "age".to_string(),
+                        value: SqlValue::Number("1".to_string()),
+                    },
+                },
+                SetAssignment {
+                    attribute: "count".to_string(),
+                    value: SetValue::Subtract {
+                        attribute: "count".to_string(),
+                        value: SqlValue::Number("5".to_string()),
+                    },
+                },
+            ],
+            remove_attributes: vec![],
+        };
+
+        let translation = PartiQLTranslator::translate_update(&stmt).unwrap();
+        assert!(translation.expression.contains("age = age + :v1"));
+        assert!(translation.expression.contains("count = count - :v2"));
+        assert_eq!(translation.values.len(), 2);
+    }
+
+    #[test]
+    fn test_translate_update_with_remove() {
+        let stmt = UpdateStatement {
+            table_name: "users".to_string(),
+            where_clause: WhereClause {
+                conditions: vec![Condition {
+                    attribute: "pk".to_string(),
+                    operator: CompareOp::Equal,
+                    value: SqlValue::String("user#123".to_string()),
+                }],
+            },
+            set_assignments: vec![SetAssignment {
+                attribute: "name".to_string(),
+                value: SetValue::Literal(SqlValue::String("Alice".to_string())),
+            }],
+            remove_attributes: vec!["tags".to_string(), "metadata".to_string()],
+        };
+
+        let translation = PartiQLTranslator::translate_update(&stmt).unwrap();
+        assert!(translation.expression.contains("SET"));
+        assert!(translation.expression.contains("REMOVE tags, metadata"));
+        assert_eq!(translation.values.len(), 1); // :v1 for name
+    }
+
+    #[test]
+    fn test_translate_update_remove_only() {
+        let stmt = UpdateStatement {
+            table_name: "users".to_string(),
+            where_clause: WhereClause {
+                conditions: vec![
+                    Condition {
+                        attribute: "pk".to_string(),
+                        operator: CompareOp::Equal,
+                        value: SqlValue::String("user#123".to_string()),
+                    },
+                    Condition {
+                        attribute: "sk".to_string(),
+                        operator: CompareOp::Equal,
+                        value: SqlValue::String("profile".to_string()),
+                    },
+                ],
+            },
+            set_assignments: vec![],
+            remove_attributes: vec!["tags".to_string(), "metadata".to_string()],
+        };
+
+        let translation = PartiQLTranslator::translate_update(&stmt).unwrap();
+        assert_eq!(translation.key.pk.as_ref(), "user#123".as_bytes());
+        assert_eq!(translation.key.sk.as_ref().map(|b| b.as_ref()), Some("profile".as_bytes()));
+        assert_eq!(translation.expression, "REMOVE tags, metadata");
+        assert_eq!(translation.values.len(), 0); // No placeholders needed
     }
 }
