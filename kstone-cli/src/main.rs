@@ -1,10 +1,22 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use kstone_api::{Database, KeystoneValue, ExecuteStatementResponse};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 mod table;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum OutputFormat {
+    /// Table format (default)
+    Table,
+    /// Pretty JSON
+    Json,
+    /// JSON Lines (one item per line)
+    Jsonl,
+    /// CSV format
+    Csv,
+}
 
 #[derive(Parser)]
 #[command(name = "kstone")]
@@ -50,6 +62,12 @@ enum Commands {
         path: PathBuf,
         /// PartiQL SQL statement
         sql: String,
+        /// Maximum number of items to return
+        #[arg(short, long)]
+        limit: Option<usize>,
+        /// Output format (table, json, jsonl, csv)
+        #[arg(short, long, value_enum, default_value = "table")]
+        output: OutputFormat,
     },
 }
 
@@ -99,24 +117,53 @@ fn main() -> Result<()> {
             println!("Item deleted");
         }
 
-        Commands::Query { path, sql } => {
+        Commands::Query { path, sql, limit, output } => {
             let db = Database::open(&path).context("Failed to open database")?;
 
-            match db.execute_statement(&sql).context("Failed to execute statement")? {
+            // Append LIMIT clause if provided
+            let sql_with_limit = if let Some(limit_val) = limit {
+                format!("{} LIMIT {}", sql, limit_val)
+            } else {
+                sql
+            };
+
+            match db.execute_statement(&sql_with_limit).context("Failed to execute statement")? {
                 ExecuteStatementResponse::Select {
                     items,
                     count,
                     scanned_count,
                     last_key,
                 } => {
-                    // Format and print results as a table
-                    let table = table::format_items_table(&items);
-                    println!("{}", table);
-                    println!();
-                    println!("Count: {}, Scanned: {}", count, scanned_count);
+                    // Format and print results based on output format
+                    match output {
+                        OutputFormat::Table => {
+                            let table = table::format_items_table(&items);
+                            println!("{}", table);
+                            println!();
+                            println!("Count: {}, Scanned: {}", count, scanned_count);
 
-                    if last_key.is_some() {
-                        println!("(More results available - pagination not yet supported in CLI)");
+                            if last_key.is_some() {
+                                println!("(More results available - use LIMIT/OFFSET for pagination)");
+                            }
+                        }
+                        OutputFormat::Json => {
+                            // Pretty JSON array
+                            let json_items: Vec<_> = items.iter()
+                                .map(item_to_json)
+                                .collect();
+                            println!("{}", serde_json::to_string_pretty(&json_items)?);
+                        }
+                        OutputFormat::Jsonl => {
+                            // JSON Lines - one item per line
+                            for item in &items {
+                                let json = item_to_json(item);
+                                println!("{}", serde_json::to_string(&json)?);
+                            }
+                        }
+                        OutputFormat::Csv => {
+                            // CSV format
+                            format_csv(&items)?;
+                        }
                     }
                 }
                 ExecuteStatementResponse::Insert { success } => {
@@ -256,6 +303,68 @@ fn base64_encode(bytes: &[u8]) -> String {
     encoder.write_all(bytes).unwrap();
     drop(encoder);
     String::from_utf8(buf).unwrap()
+}
+
+fn format_csv(items: &[HashMap<String, KeystoneValue>]) -> Result<()> {
+    use std::collections::HashSet;
+
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    // Collect all unique attribute names
+    let mut all_keys = HashSet::new();
+    for item in items {
+        for key in item.keys() {
+            all_keys.insert(key.clone());
+        }
+    }
+
+    // Sort keys for consistent column order
+    let mut sorted_keys: Vec<_> = all_keys.into_iter().collect();
+    sorted_keys.sort();
+
+    // Print header
+    println!("{}", sorted_keys.join(","));
+
+    // Print rows
+    for item in items {
+        let row: Vec<String> = sorted_keys.iter().map(|key| {
+            item.get(key)
+                .map(|value| format_csv_value(value))
+                .unwrap_or_else(|| String::new())
+        }).collect();
+        println!("{}", row.join(","));
+    }
+
+    Ok(())
+}
+
+fn format_csv_value(value: &KeystoneValue) -> String {
+    match value {
+        KeystoneValue::S(s) => escape_csv(s),
+        KeystoneValue::N(n) => n.clone(),
+        KeystoneValue::Bool(b) => b.to_string(),
+        KeystoneValue::Null => String::new(),
+        KeystoneValue::L(list) => {
+            let items: Vec<String> = list.iter()
+                .map(format_csv_value)
+                .collect();
+            escape_csv(&format!("[{}]", items.join(",")))
+        }
+        KeystoneValue::M(_) => escape_csv("[object]"),
+        KeystoneValue::B(_) => escape_csv("[binary]"),
+        KeystoneValue::VecF32(_) => escape_csv("[vector]"),
+        KeystoneValue::Ts(ts) => ts.to_string(),
+    }
+}
+
+fn escape_csv(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 mod base64 {
