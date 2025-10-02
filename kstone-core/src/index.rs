@@ -75,6 +75,44 @@ pub struct GlobalSecondaryIndex {
     pub projection: IndexProjection,
 }
 
+impl GlobalSecondaryIndex {
+    /// Create a new GSI with partition key only
+    pub fn new(name: impl Into<String>, partition_key_attribute: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            partition_key_attribute: partition_key_attribute.into(),
+            sort_key_attribute: None,
+            projection: IndexProjection::All,
+        }
+    }
+
+    /// Create a new GSI with partition key and sort key
+    pub fn with_sort_key(
+        name: impl Into<String>,
+        partition_key_attribute: impl Into<String>,
+        sort_key_attribute: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            partition_key_attribute: partition_key_attribute.into(),
+            sort_key_attribute: Some(sort_key_attribute.into()),
+            projection: IndexProjection::All,
+        }
+    }
+
+    /// Set projection to keys only
+    pub fn keys_only(mut self) -> Self {
+        self.projection = IndexProjection::KeysOnly;
+        self
+    }
+
+    /// Set projection to include specific attributes
+    pub fn include(mut self, attributes: Vec<String>) -> Self {
+        self.projection = IndexProjection::Include(attributes);
+        self
+    }
+}
+
 /// Table schema with index definitions
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TableSchema {
@@ -99,6 +137,17 @@ impl TableSchema {
     /// Get LSI by name
     pub fn get_local_index(&self, name: &str) -> Option<&LocalSecondaryIndex> {
         self.local_indexes.iter().find(|idx| idx.name == name)
+    }
+
+    /// Add a global secondary index (Phase 3.2+)
+    pub fn add_global_index(mut self, index: GlobalSecondaryIndex) -> Self {
+        self.global_indexes.push(index);
+        self
+    }
+
+    /// Get GSI by name (Phase 3.2+)
+    pub fn get_global_index(&self, name: &str) -> Option<&GlobalSecondaryIndex> {
+        self.global_indexes.iter().find(|idx| idx.name == name)
     }
 }
 
@@ -241,5 +290,41 @@ mod tests {
         // Base table key encoding (from types.rs Key::encode)
         let base_key = vec![0, 0, 0, 4, b'u', b's', b'e', b'r'];
         assert!(!is_index_key(&base_key));
+    }
+
+    #[test]
+    fn test_gsi_creation() {
+        let gsi = GlobalSecondaryIndex::new("status-index", "status");
+        assert_eq!(gsi.name, "status-index");
+        assert_eq!(gsi.partition_key_attribute, "status");
+        assert_eq!(gsi.sort_key_attribute, None);
+        assert_eq!(gsi.projection, IndexProjection::All);
+    }
+
+    #[test]
+    fn test_gsi_with_sort_key() {
+        let gsi = GlobalSecondaryIndex::with_sort_key("user-index", "userId", "timestamp");
+        assert_eq!(gsi.name, "user-index");
+        assert_eq!(gsi.partition_key_attribute, "userId");
+        assert_eq!(gsi.sort_key_attribute, Some("timestamp".to_string()));
+    }
+
+    #[test]
+    fn test_gsi_keys_only() {
+        let gsi = GlobalSecondaryIndex::new("status-index", "status").keys_only();
+        assert_eq!(gsi.projection, IndexProjection::KeysOnly);
+    }
+
+    #[test]
+    fn test_table_schema_with_gsi() {
+        let schema = TableSchema::new()
+            .add_local_index(LocalSecondaryIndex::new("lsi1", "attr1"))
+            .add_global_index(GlobalSecondaryIndex::new("gsi1", "attr2"))
+            .add_global_index(GlobalSecondaryIndex::with_sort_key("gsi2", "attr3", "attr4"));
+
+        assert_eq!(schema.local_indexes.len(), 1);
+        assert_eq!(schema.global_indexes.len(), 2);
+        assert!(schema.get_global_index("gsi1").is_some());
+        assert!(schema.get_global_index("gsi3").is_none());
     }
 }

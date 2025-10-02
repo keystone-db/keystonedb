@@ -203,6 +203,11 @@ impl LsmEngine {
             self.materialize_lsi_entries(&mut inner, &key, &item)?;
         }
 
+        // Materialize GSI entries (Phase 3.2+)
+        if !inner.schema.global_indexes.is_empty() {
+            self.materialize_gsi_entries(&mut inner, &key, &item)?;
+        }
+
         // Check if this stripe needs to flush
         if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
             self.flush_stripe(&mut inner, stripe_id)?;
@@ -717,6 +722,76 @@ impl LsmEngine {
                 // Add to memtable (route to same stripe as base record for locality)
                 let stripe_id = key.stripe() as usize;
                 inner.stripes[stripe_id].memtable.insert(index_key_encoded, index_record);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Materialize GSI entries for an item (Phase 3.2+)
+    fn materialize_gsi_entries(&self, inner: &mut LsmInner, base_key: &Key, item: &Item) -> Result<()> {
+        // For each GSI defined in the schema
+        for gsi in &inner.schema.global_indexes {
+            // Extract the GSI partition key value from the item
+            if let Some(gsi_pk_value) = item.get(&gsi.partition_key_attribute) {
+                // Convert Value to Bytes for the GSI partition key
+                let gsi_pk_bytes = match gsi_pk_value {
+                    Value::S(s) => Bytes::copy_from_slice(s.as_bytes()),
+                    Value::N(n) => Bytes::copy_from_slice(n.as_bytes()),
+                    Value::B(b) => b.clone(),
+                    Value::Bool(b) => Bytes::copy_from_slice(if *b { b"true" } else { b"false" }),
+                    Value::Ts(ts) => Bytes::copy_from_slice(&ts.to_le_bytes()),
+                    _ => continue, // Skip unsupported types
+                };
+
+                // Extract the GSI sort key value (if defined)
+                let mut gsi_sk_bytes = if let Some(gsi_sk_attr) = &gsi.sort_key_attribute {
+                    if let Some(gsi_sk_value) = item.get(gsi_sk_attr) {
+                        match gsi_sk_value {
+                            Value::S(s) => Bytes::copy_from_slice(s.as_bytes()),
+                            Value::N(n) => Bytes::copy_from_slice(n.as_bytes()),
+                            Value::B(b) => b.clone(),
+                            Value::Bool(b) => Bytes::copy_from_slice(if *b { b"true" } else { b"false" }),
+                            Value::Ts(ts) => Bytes::copy_from_slice(&ts.to_le_bytes()),
+                            _ => Bytes::new(), // Use empty bytes for unsupported types
+                        }
+                    } else {
+                        continue; // Skip if sort key attribute doesn't exist
+                    }
+                } else {
+                    Bytes::new() // No sort key for this GSI
+                };
+
+                // For GSI, append base table PK to ensure uniqueness
+                // This allows multiple base items with same GSI PK+SK
+                let base_pk_encoded = base_key.encode();
+                let mut combined_sk = Vec::with_capacity(gsi_sk_bytes.len() + base_pk_encoded.len());
+                combined_sk.extend_from_slice(&gsi_sk_bytes);
+                combined_sk.extend_from_slice(&base_pk_encoded);
+                gsi_sk_bytes = Bytes::from(combined_sk);
+
+                // Create GSI index key
+                let index_key_encoded = encode_index_key(&gsi.name, &gsi_pk_bytes, &gsi_sk_bytes);
+
+                // Create index record with the full item
+                let index_item = item.clone(); // For now, always store full item
+
+                // Create a synthetic Key from the encoded bytes
+                let index_key = Key::new(Bytes::copy_from_slice(&index_key_encoded));
+
+                let seq = inner.next_seq;
+                inner.next_seq += 1;
+
+                let index_record = Record::put(index_key, index_item, seq);
+
+                // Write index record to WAL
+                inner.wal.append(index_record.clone())?;
+
+                // Add to memtable - IMPORTANT: route to stripe based on GSI PK value
+                // Use a temporary key with just the GSI PK to determine stripe
+                let gsi_stripe_key = Key::new(gsi_pk_bytes.clone());
+                let gsi_stripe_id = gsi_stripe_key.stripe() as usize;
+                inner.stripes[gsi_stripe_id].memtable.insert(index_key_encoded, index_record);
             }
         }
 

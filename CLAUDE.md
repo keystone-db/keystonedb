@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. Currently in **Phase 0 (Walking Skeleton)** - a minimal but complete end-to-end implementation with Put/Get/Delete operations, persistent storage, and crash recovery.
+KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. Currently in **Phase 3 (Indexes)** - implementing DynamoDB-style secondary indexes (LSI and GSI).
 
 **Target:** Eventually a full Dynamo-model database with cloud sync, FTS/vector indexes, and attachment to DynamoDB or remote KeystoneDB instances.
 
@@ -799,6 +799,99 @@ let response = db.query(query)?;
 println!("Found {} high scorers", response.items.len());
 ```
 
+### Global Secondary Indexes (Phase 3.2+)
+
+#### Creating a table with GSI
+```rust
+use kstone_api::{Database, TableSchema, GlobalSecondaryIndex};
+
+// GSI with partition key only
+let schema = TableSchema::new()
+    .add_global_index(GlobalSecondaryIndex::new("status-index", "status"));
+
+// GSI with partition key AND sort key
+let schema = TableSchema::new()
+    .add_global_index(
+        GlobalSecondaryIndex::with_sort_key("category-price-index", "category", "price")
+    );
+
+let db = Database::create_with_schema(path, schema)?;
+```
+
+#### Key difference between LSI and GSI
+- **LSI**: Uses same partition key as base table, different sort key
+  - LSI entries stored in SAME stripe as base record
+  - Query by base table PK, filter by LSI sort key
+- **GSI**: Uses DIFFERENT partition key (and optionally sort key)
+  - GSI entries route to stripe based on GSI partition key value
+  - Enables queries across different base table partitions
+
+#### Querying by GSI
+```rust
+use kstone_api::Query;
+
+// Put items with different base PKs but same GSI partition key
+db.put(b"user#alice", ItemBuilder::new()
+    .string("name", "Alice")
+    .string("status", "active")  // GSI partition key
+    .number("timestamp", 1000)
+    .build())?;
+
+db.put(b"user#bob", ItemBuilder::new()
+    .string("name", "Bob")
+    .string("status", "active")  // Same GSI PK - different base PK
+    .number("timestamp", 2000)
+    .build())?;
+
+// Query by status="active" - finds items across different base partitions
+let query = Query::new(b"active")
+    .index("status-index");
+
+let response = db.query(query)?;
+println!("Found {} active users", response.items.len()); // Finds both Alice and Bob
+```
+
+#### GSI with sort key conditions
+```rust
+// Query GSI with sort key range
+let query = Query::new(b"electronics")
+    .index("category-price-index")
+    .sk_between(b"100", b"1000")  // Price range
+    .limit(20);
+
+let response = db.query(query)?;
+
+// GSI supports all query features
+let query = Query::new(b"books")
+    .index("category-price-index")
+    .sk_gte(b"50")
+    .forward(false)  // Descending price
+    .limit(10);
+
+let response = db.query(query)?;
+```
+
+#### GSI projection types
+```rust
+use kstone_api::{GlobalSecondaryIndex, IndexProjection};
+
+// Project all attributes (default)
+let gsi_all = GlobalSecondaryIndex::new("status-index", "status");
+
+// Project only keys
+let gsi_keys = GlobalSecondaryIndex::with_sort_key("category-index", "category", "price")
+    .keys_only();
+
+// Project specific attributes
+let gsi_include = GlobalSecondaryIndex::new("region-index", "region")
+    .include(vec!["country".to_string(), "city".to_string()]);
+
+let schema = TableSchema::new()
+    .add_global_index(gsi_all)
+    .add_global_index(gsi_keys)
+    .add_global_index(gsi_include);
+```
+
 ### Transactions (Phase 2.7+)
 
 #### Transact get - atomic reads
@@ -1232,8 +1325,22 @@ All sub-phases 2.1-2.7 implemented with full DynamoDB-compatible API.
 - New tests: test_lsi_*, test_database_create_with_lsi, test_database_query_by_lsi, test_database_query_lsi_with_condition
 - All tests passing (105 core + 46 API = 151 tests + 6 integration = 157 total)
 
+*Phase 3.2 Global Secondary Indexes (GSI) - COMPLETE ✅*
+- GlobalSecondaryIndex struct with partition_key_attribute and optional sort_key_attribute
+- Builder methods: GlobalSecondaryIndex::new(), with_sort_key(), keys_only(), include()
+- TableSchema methods: add_global_index(), get_global_index()
+- Automatic GSI materialization during writes (put creates GSI index entries)
+- GSI index key format: [0xFF | index_name | gsi_pk | gsi_sk + base_pk] for uniqueness
+- GSI stripe routing: based on GSI partition key value (not base table PK)
+- Enables cross-partition queries (different base PKs, same GSI PK)
+- Query support: Query::new(gsi_pk).index("gsi-name").sk_condition()
+- Same query path handles both LSI and GSI (unified index query logic)
+- All projection types supported (All, KeysOnly, Include)
+- Extended index.rs with GSI builders and tests
+- New tests: test_gsi_*, test_database_create_with_gsi, test_database_query_by_gsi, test_database_query_gsi_with_sort_key_condition, test_database_gsi_different_stripes
+- All tests passing (109 core + 50 API = 159 tests + 6 integration = 165 total)
+
 **Future phases** (not yet implemented):
-- Phase 3.2: GSI (Global Secondary Indexes)
 - Phase 3.3: TTL (Time To Live)
 - Phase 3.4: Streams (Change Data Capture)
 - Phase 4+: Attachment framework (DynamoDB sync, remote KeystoneDB sync)

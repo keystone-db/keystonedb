@@ -1178,6 +1178,161 @@ mod tests {
         // Should find 3 items (500, 750, 900)
         assert_eq!(response.items.len(), 3);
     }
+
+    #[test]
+    fn test_database_create_with_gsi() {
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with GSI on status attribute
+        let schema = TableSchema::new()
+            .add_global_index(GlobalSecondaryIndex::new("status-index", "status"));
+
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put items with different partition keys but same status
+        db.put(b"user#1", ItemBuilder::new()
+            .string("name", "Alice")
+            .string("status", "active")
+            .build()).unwrap();
+
+        db.put(b"user#2", ItemBuilder::new()
+            .string("name", "Bob")
+            .string("status", "active")
+            .build()).unwrap();
+
+        db.put(b"user#3", ItemBuilder::new()
+            .string("name", "Charlie")
+            .string("status", "inactive")
+            .build()).unwrap();
+
+        // Verify base records
+        assert!(db.get(b"user#1").unwrap().is_some());
+        assert!(db.get(b"user#2").unwrap().is_some());
+        assert!(db.get(b"user#3").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_database_query_by_gsi() {
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with GSI on status attribute (PK) and timestamp (SK)
+        let schema = TableSchema::new()
+            .add_global_index(GlobalSecondaryIndex::with_sort_key(
+                "status-time-index",
+                "status",
+                "timestamp"
+            ));
+
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put items with different base PKs but same status
+        for i in 1..=5 {
+            db.put(format!("user#{}", i).as_bytes(), ItemBuilder::new()
+                .string("name", format!("User {}", i))
+                .string("status", "active")
+                .number("timestamp", 1000 + i)
+                .build()).unwrap();
+        }
+
+        // Put items with different status
+        for i in 6..=8 {
+            db.put(format!("user#{}", i).as_bytes(), ItemBuilder::new()
+                .string("name", format!("User {}", i))
+                .string("status", "inactive")
+                .number("timestamp", 1000 + i)
+                .build()).unwrap();
+        }
+
+        // Query by status="active" using GSI
+        let query = Query::new(b"active")
+            .index("status-time-index");
+
+        let response = db.query(query).unwrap();
+
+        // Should find all 5 active users
+        assert_eq!(response.items.len(), 5);
+
+        // Verify all have status=active
+        for item in &response.items {
+            assert_eq!(item.get("status").unwrap().as_string().unwrap(), "active");
+        }
+    }
+
+    #[test]
+    fn test_database_query_gsi_with_sort_key_condition() {
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with GSI
+        let schema = TableSchema::new()
+            .add_global_index(GlobalSecondaryIndex::with_sort_key(
+                "status-time-index",
+                "status",
+                "timestamp"
+            ));
+
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put items
+        for i in 1..=10 {
+            db.put(format!("order#{}", i).as_bytes(), ItemBuilder::new()
+                .string("status", "shipped")
+                .number("timestamp", 1000 + i * 100)
+                .number("amount", i * 10)
+                .build()).unwrap();
+        }
+
+        // Query for status="shipped" AND timestamp >= 1500
+        let query = Query::new(b"shipped")
+            .index("status-time-index")
+            .sk_gte(b"1500");
+
+        let response = db.query(query).unwrap();
+
+        // Should find items with timestamp >= 1500 (items 5-10 = 6 items)
+        assert_eq!(response.items.len(), 6);
+    }
+
+    #[test]
+    fn test_database_gsi_different_stripes() {
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with GSI on category
+        let schema = TableSchema::new()
+            .add_global_index(GlobalSecondaryIndex::new("category-index", "category"));
+
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put items with different base PKs that will route to different stripes
+        // but same GSI partition key (category)
+        db.put(b"product#electronics#laptop", ItemBuilder::new()
+            .string("name", "Laptop")
+            .string("category", "electronics")
+            .build()).unwrap();
+
+        db.put(b"product#books#novel", ItemBuilder::new()
+            .string("name", "Novel")
+            .string("category", "books")
+            .build()).unwrap();
+
+        db.put(b"product#electronics#phone", ItemBuilder::new()
+            .string("name", "Phone")
+            .string("category", "electronics")
+            .build()).unwrap();
+
+        // Query GSI by category="electronics"
+        let query = Query::new(b"electronics")
+            .index("category-index");
+
+        let response = db.query(query).unwrap();
+
+        // Should find both electronics items regardless of base table stripe
+        assert_eq!(response.items.len(), 2);
+
+        // Verify both have category=electronics
+        for item in &response.items {
+            assert_eq!(item.get("category").unwrap().as_string().unwrap(), "electronics");
+        }
+    }
 }
 
 
