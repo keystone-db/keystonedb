@@ -892,6 +892,131 @@ let schema = TableSchema::new()
     .add_global_index(gsi_include);
 ```
 
+### Time To Live (TTL) (Phase 3.3+)
+
+#### Creating a table with TTL
+```rust
+use kstone_api::{Database, TableSchema};
+
+// Enable TTL on "expiresAt" attribute
+let schema = TableSchema::new().with_ttl("expiresAt");
+let db = Database::create_with_schema(path, schema)?;
+```
+
+#### Using TTL - automatic expiration
+```rust
+use kstone_core::Value;
+
+// Get current time in seconds since epoch
+let now = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_secs() as i64;
+
+// Put item that expires in 1 hour
+db.put(b"session#abc123", ItemBuilder::new()
+    .string("userId", "user#456")
+    .string("token", "xyz...")
+    .number("expiresAt", now + 3600)  // 1 hour from now
+    .build())?;
+
+// Put item that expires in 24 hours
+db.put(b"cache#data1", ItemBuilder::new()
+    .string("value", "cached data")
+    .number("expiresAt", now + 86400)  // 24 hours from now
+    .build())?;
+```
+
+#### TTL lazy deletion
+```rust
+// Items past their expiration time are automatically filtered out
+// during read operations (get, query, scan)
+
+let now = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_secs() as i64;
+
+// Put item that expired 100 seconds ago
+db.put(b"expired#1", ItemBuilder::new()
+    .string("data", "old data")
+    .number("expiresAt", now - 100)
+    .build())?;
+
+// Get returns None for expired items (lazy deletion)
+let result = db.get(b"expired#1")?;
+assert!(result.is_none());
+```
+
+#### TTL with queries and scans
+```rust
+// Expired items are automatically filtered from query/scan results
+
+let now = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_secs() as i64;
+
+// Put mix of expired and valid items
+for i in 1..=5 {
+    let expires = if i <= 2 {
+        now - 100  // Expired
+    } else {
+        now + 1000  // Valid
+    };
+
+    db.put_with_sk(b"user#123", format!("item#{}", i).as_bytes(),
+        ItemBuilder::new()
+            .string("name", format!("Item {}", i))
+            .number("expiresAt", expires)
+            .build())?;
+}
+
+// Query only returns non-expired items (items 3, 4, 5)
+let query = Query::new(b"user#123");
+let response = db.query(query)?;
+assert_eq!(response.items.len(), 3);
+
+// Scan also filters expired items
+let scan = Scan::new();
+let response = db.scan(scan)?;
+// Only non-expired items returned
+```
+
+#### TTL with Timestamp value type
+```rust
+use kstone_core::Value;
+
+// TTL supports both Number (seconds) and Timestamp (milliseconds) types
+let now_millis = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_millis() as i64;
+
+let mut item = ItemBuilder::new()
+    .string("data", "test")
+    .build();
+item.insert("expiresAt".to_string(), Value::Ts(now_millis + 3600_000));  // +1 hour
+
+db.put(b"item#1", item)?;
+```
+
+#### Items without TTL attribute
+```rust
+// Items without the TTL attribute never expire
+let schema = TableSchema::new().with_ttl("expiresAt");
+let db = Database::create_with_schema(path, schema)?;
+
+// This item has no expiresAt attribute - will never expire
+db.put(b"permanent#1", ItemBuilder::new()
+    .string("data", "permanent data")
+    .build())?;
+
+// Always retrievable
+let result = db.get(b"permanent#1")?;
+assert!(result.is_some());
+```
+
 ### Transactions (Phase 2.7+)
 
 #### Transact get - atomic reads
@@ -1340,7 +1465,19 @@ All sub-phases 2.1-2.7 implemented with full DynamoDB-compatible API.
 - New tests: test_gsi_*, test_database_create_with_gsi, test_database_query_by_gsi, test_database_query_gsi_with_sort_key_condition, test_database_gsi_different_stripes
 - All tests passing (109 core + 50 API = 159 tests + 6 integration = 165 total)
 
+*Phase 3.3 Time To Live (TTL) - COMPLETE ✅*
+- TableSchema.ttl_attribute_name field for configuring TTL attribute
+- TableSchema.with_ttl(attribute_name) builder method
+- TableSchema.is_expired(item) method checks if item is expired
+- Lazy deletion: expired items filtered during get(), query(), scan()
+- Supports both Number (seconds since epoch) and Timestamp (milliseconds) value types
+- Items without TTL attribute never expire
+- Automatic deletion on read: get() deletes expired items and returns None
+- Query and scan automatically filter out expired items
+- Extended index.rs with TTL schema methods and 6 unit tests
+- New tests: test_ttl_*, test_database_ttl_lazy_deletion, test_database_ttl_query_filter, test_database_ttl_scan_filter, test_database_ttl_no_ttl_attribute, test_database_ttl_timestamp_value_type
+- All tests passing (115 core + 55 API = 170 tests + 6 integration = 176 total)
+
 **Future phases** (not yet implemented):
-- Phase 3.3: TTL (Time To Live)
 - Phase 3.4: Streams (Change Data Capture)
 - Phase 4+: Attachment framework (DynamoDB sync, remote KeystoneDB sync)

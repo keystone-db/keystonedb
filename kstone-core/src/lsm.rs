@@ -244,12 +244,30 @@ impl LsmEngine {
 
         // Check stripe's memtable first
         if let Some(record) = stripe.memtable.get(&key_enc) {
+            if let Some(item) = &record.value {
+                // Check TTL (Phase 3.3+)
+                if inner.schema.is_expired(item) {
+                    // Item is expired - perform lazy deletion
+                    drop(inner); // Release read lock
+                    self.delete(key.clone())?;
+                    return Ok(None);
+                }
+            }
             return Ok(record.value.clone());
         }
 
         // Check stripe's SSTs (newest to oldest)
         for sst in &stripe.ssts {
             if let Some(record) = sst.get(key) {
+                if let Some(item) = &record.value {
+                    // Check TTL (Phase 3.3+)
+                    if inner.schema.is_expired(item) {
+                        // Item is expired - perform lazy deletion
+                        drop(inner); // Release read lock
+                        self.delete(key.clone())?;
+                        return Ok(None);
+                    }
+                }
                 return Ok(record.value.clone());
             }
         }
@@ -439,6 +457,13 @@ impl LsmEngine {
             // Skip tombstones
             if record.value.is_none() {
                 continue;
+            }
+
+            // Check TTL and skip expired items (Phase 3.3+)
+            if let Some(ref item) = record.value {
+                if inner.schema.is_expired(item) {
+                    continue; // Skip expired items
+                }
             }
 
             last_key = Some(record.key.clone());
@@ -668,6 +693,14 @@ impl LsmEngine {
             }
 
             scanned_count += 1;
+
+            // Check TTL and skip expired items (Phase 3.3+)
+            if let Some(ref item) = record.value {
+                if inner.schema.is_expired(item) {
+                    continue; // Skip expired items
+                }
+            }
+
             last_key = Some(record.key.clone());
 
             if let Some(item) = record.value {

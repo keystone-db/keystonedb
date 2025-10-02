@@ -120,6 +120,9 @@ pub struct TableSchema {
     pub local_indexes: Vec<LocalSecondaryIndex>,
     /// Global secondary indexes (Phase 3.2+)
     pub global_indexes: Vec<GlobalSecondaryIndex>,
+    /// TTL attribute name (Phase 3.3+)
+    /// When set, items with this attribute containing a timestamp in the past are considered expired
+    pub ttl_attribute_name: Option<String>,
 }
 
 impl TableSchema {
@@ -148,6 +151,48 @@ impl TableSchema {
     /// Get GSI by name (Phase 3.2+)
     pub fn get_global_index(&self, name: &str) -> Option<&GlobalSecondaryIndex> {
         self.global_indexes.iter().find(|idx| idx.name == name)
+    }
+
+    /// Enable TTL (Time To Live) with the specified attribute name (Phase 3.3+)
+    ///
+    /// Items with this attribute containing a Unix timestamp (seconds since epoch)
+    /// in the past will be considered expired and automatically deleted.
+    pub fn with_ttl(mut self, attribute_name: impl Into<String>) -> Self {
+        self.ttl_attribute_name = Some(attribute_name.into());
+        self
+    }
+
+    /// Check if an item is expired based on TTL (Phase 3.3+)
+    ///
+    /// Returns true if:
+    /// - TTL is enabled AND
+    /// - Item has the TTL attribute AND
+    /// - The TTL timestamp is in the past
+    pub fn is_expired(&self, item: &crate::Item) -> bool {
+        use crate::Value;
+
+        if let Some(ttl_attr) = &self.ttl_attribute_name {
+            if let Some(ttl_value) = item.get(ttl_attr) {
+                // Get current time in seconds since epoch
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+
+                // Extract expiration timestamp from item
+                let expires_at = match ttl_value {
+                    Value::N(n) => n.parse::<i64>().ok(),
+                    Value::Ts(ts) => Some(ts / 1000), // Convert millis to seconds
+                    _ => None,
+                };
+
+                if let Some(expires) = expires_at {
+                    return now > expires;
+                }
+            }
+        }
+
+        false
     }
 }
 
@@ -326,5 +371,103 @@ mod tests {
         assert_eq!(schema.global_indexes.len(), 2);
         assert!(schema.get_global_index("gsi1").is_some());
         assert!(schema.get_global_index("gsi3").is_none());
+    }
+
+    #[test]
+    fn test_ttl_schema() {
+        let schema = TableSchema::new().with_ttl("expiresAt");
+
+        assert_eq!(schema.ttl_attribute_name, Some("expiresAt".to_string()));
+    }
+
+    #[test]
+    fn test_ttl_expired_item() {
+        use crate::Value;
+        use std::collections::HashMap;
+
+        let schema = TableSchema::new().with_ttl("ttl");
+
+        // Item expired 100 seconds ago
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let expired_time = now - 100;
+
+        let mut item = HashMap::new();
+        item.insert("name".to_string(), Value::string("test"));
+        item.insert("ttl".to_string(), Value::number(expired_time));
+
+        assert!(schema.is_expired(&item));
+    }
+
+    #[test]
+    fn test_ttl_not_expired_item() {
+        use crate::Value;
+        use std::collections::HashMap;
+
+        let schema = TableSchema::new().with_ttl("ttl");
+
+        // Item expires 100 seconds in the future
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let future_time = now + 100;
+
+        let mut item = HashMap::new();
+        item.insert("name".to_string(), Value::string("test"));
+        item.insert("ttl".to_string(), Value::number(future_time));
+
+        assert!(!schema.is_expired(&item));
+    }
+
+    #[test]
+    fn test_ttl_no_ttl_attribute() {
+        use crate::Value;
+        use std::collections::HashMap;
+
+        let schema = TableSchema::new().with_ttl("ttl");
+
+        // Item has no ttl attribute
+        let mut item = HashMap::new();
+        item.insert("name".to_string(), Value::string("test"));
+
+        assert!(!schema.is_expired(&item));
+    }
+
+    #[test]
+    fn test_ttl_disabled() {
+        use crate::Value;
+        use std::collections::HashMap;
+
+        let schema = TableSchema::new(); // No TTL configured
+
+        let mut item = HashMap::new();
+        item.insert("name".to_string(), Value::string("test"));
+        item.insert("ttl".to_string(), Value::number(0)); // Ancient timestamp
+
+        assert!(!schema.is_expired(&item));
+    }
+
+    #[test]
+    fn test_ttl_with_timestamp_value() {
+        use crate::Value;
+        use std::collections::HashMap;
+
+        let schema = TableSchema::new().with_ttl("expiresAt");
+
+        // Item with Timestamp value type (milliseconds)
+        let now_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let expired_millis = now_millis - 100_000; // 100 seconds ago
+
+        let mut item = HashMap::new();
+        item.insert("name".to_string(), Value::string("test"));
+        item.insert("expiresAt".to_string(), Value::Ts(expired_millis));
+
+        assert!(schema.is_expired(&item));
     }
 }

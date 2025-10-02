@@ -1333,6 +1333,174 @@ mod tests {
             assert_eq!(item.get("category").unwrap().as_string().unwrap(), "electronics");
         }
     }
+
+    #[test]
+    fn test_database_ttl_lazy_deletion() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with TTL enabled on "expiresAt" attribute
+        let schema = TableSchema::new().with_ttl("expiresAt");
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Get current time
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Put item that expired 100 seconds ago
+        let expired_item = ItemBuilder::new()
+            .string("name", "Expired Item")
+            .number("expiresAt", now - 100)
+            .build();
+        db.put(b"item#1", expired_item).unwrap();
+
+        // Put item that expires in the future
+        let valid_item = ItemBuilder::new()
+            .string("name", "Valid Item")
+            .number("expiresAt", now + 1000)
+            .build();
+        db.put(b"item#2", valid_item).unwrap();
+
+        // Get expired item - should return None (lazy deletion)
+        let result = db.get(b"item#1").unwrap();
+        assert!(result.is_none());
+
+        // Get valid item - should return the item
+        let result = db.get(b"item#2").unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().get("name").unwrap().as_string().unwrap(), "Valid Item");
+    }
+
+    #[test]
+    fn test_database_ttl_query_filter() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with TTL
+        let schema = TableSchema::new().with_ttl("ttl");
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Put multiple items with same PK, different SK, different expiration times
+        for i in 1..=5 {
+            let ttl_value = if i <= 2 {
+                now - 100 // Expired
+            } else {
+                now + 1000 // Valid
+            };
+
+            db.put_with_sk(
+                b"user#123",
+                format!("item#{}", i).as_bytes(),
+                ItemBuilder::new()
+                    .string("name", format!("User {}", i))
+                    .number("ttl", ttl_value)
+                    .build()
+            ).unwrap();
+        }
+
+        // Query - should only return non-expired items
+        let query = Query::new(b"user#123");
+        let response = db.query(query).unwrap();
+
+        assert_eq!(response.items.len(), 3); // Only items 3, 4, 5
+    }
+
+    #[test]
+    fn test_database_ttl_scan_filter() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with TTL
+        let schema = TableSchema::new().with_ttl("expiresAt");
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Put items with mixed expiration
+        db.put(b"item#1", ItemBuilder::new()
+            .string("name", "Item 1")
+            .number("expiresAt", now - 100) // Expired
+            .build()).unwrap();
+
+        db.put(b"item#2", ItemBuilder::new()
+            .string("name", "Item 2")
+            .number("expiresAt", now + 1000) // Valid
+            .build()).unwrap();
+
+        db.put(b"item#3", ItemBuilder::new()
+            .string("name", "Item 3")
+            .number("expiresAt", now + 1000) // Valid
+            .build()).unwrap();
+
+        // Scan - should only return non-expired items
+        let scan = Scan::new();
+        let response = db.scan(scan).unwrap();
+
+        assert_eq!(response.items.len(), 2); // Only items 2 and 3
+    }
+
+    #[test]
+    fn test_database_ttl_no_ttl_attribute() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with TTL enabled
+        let schema = TableSchema::new().with_ttl("expiresAt");
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put item without TTL attribute
+        db.put(b"item#1", ItemBuilder::new()
+            .string("name", "No TTL Item")
+            .build()).unwrap();
+
+        // Should still be retrievable (no expiration)
+        let result = db.get(b"item#1").unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().get("name").unwrap().as_string().unwrap(), "No TTL Item");
+    }
+
+    #[test]
+    fn test_database_ttl_timestamp_value_type() {
+        use tempfile::TempDir;
+        use kstone_core::Value;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with TTL
+        let schema = TableSchema::new().with_ttl("expiresAt");
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        let now_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        // Put item with Timestamp value type (milliseconds)
+        let mut item = ItemBuilder::new()
+            .string("name", "Timestamp Item")
+            .build();
+        item.insert("expiresAt".to_string(), Value::Ts(now_millis - 100_000)); // 100 seconds ago
+
+        db.put(b"item#1", item).unwrap();
+
+        // Should be expired and return None
+        let result = db.get(b"item#1").unwrap();
+        assert!(result.is_none());
+    }
 }
 
 
