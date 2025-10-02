@@ -137,14 +137,9 @@ impl PartiQLParser {
             return Err(Error::InvalidQuery("WITH clause not supported".into()));
         }
         // ORDER BY is supported, we'll handle it below
-        if query.limit.is_some() {
-            return Err(Error::InvalidQuery("Use LIMIT in application code, not in PartiQL".into()));
-        }
+        // LIMIT and OFFSET are now supported
         if query.fetch.is_some() {
             return Err(Error::InvalidQuery("FETCH clause not supported".into()));
-        }
-        if query.offset.is_some() {
-            return Err(Error::InvalidQuery("OFFSET clause not supported".into()));
         }
 
         // Extract SELECT body
@@ -200,12 +195,26 @@ impl PartiQLParser {
             None => None,
         };
 
+        // Extract LIMIT
+        let limit = match &query.limit {
+            Some(expr) => Some(Self::extract_limit_value(expr)?),
+            None => None,
+        };
+
+        // Extract OFFSET
+        let offset = match &query.offset {
+            Some(offset_expr) => Some(Self::extract_offset_value(&offset_expr.value)?),
+            None => None,
+        };
+
         Ok(SelectStatement {
             table_name,
             index_name,
             select_list,
             where_clause,
             order_by,
+            limit,
+            offset,
         })
     }
 
@@ -612,6 +621,36 @@ impl PartiQLParser {
             sql_ast::Expr::Identifier(ident) => Ok(ident.value.clone()),
             _ => Err(Error::InvalidQuery(format!(
                 "Expected string literal, got: {:?}",
+                expr
+            ))),
+        }
+    }
+
+    /// Extract LIMIT value from expression
+    fn extract_limit_value(expr: &sql_ast::Expr) -> Result<usize> {
+        match expr {
+            sql_ast::Expr::Value(sql_ast::Value::Number(n, _)) => {
+                n.parse::<usize>().map_err(|_| {
+                    Error::InvalidQuery(format!("Invalid LIMIT value: {}", n))
+                })
+            }
+            _ => Err(Error::InvalidQuery(format!(
+                "LIMIT must be a positive integer, got: {:?}",
+                expr
+            ))),
+        }
+    }
+
+    /// Extract OFFSET value from expression
+    fn extract_offset_value(expr: &sql_ast::Expr) -> Result<usize> {
+        match expr {
+            sql_ast::Expr::Value(sql_ast::Value::Number(n, _)) => {
+                n.parse::<usize>().map_err(|_| {
+                    Error::InvalidQuery(format!("Invalid OFFSET value: {}", n))
+                })
+            }
+            _ => Err(Error::InvalidQuery(format!(
+                "OFFSET must be a positive integer, got: {:?}",
                 expr
             ))),
         }
@@ -1260,5 +1299,50 @@ mod tests {
         let result = PartiQLParser::parse(sql);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("WHERE"));
+    }
+
+    #[test]
+    fn test_parse_select_with_limit() {
+        let sql = "SELECT * FROM users WHERE pk = 'user#123' LIMIT 10";
+        let stmt = PartiQLParser::parse(sql).unwrap();
+
+        match stmt {
+            PartiQLStatement::Select(select) => {
+                assert_eq!(select.table_name, "users");
+                assert_eq!(select.limit, Some(10));
+                assert_eq!(select.offset, None);
+            }
+            _ => panic!("Expected SELECT statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_with_offset() {
+        let sql = "SELECT * FROM users WHERE pk = 'user#123' OFFSET 5";
+        let stmt = PartiQLParser::parse(sql).unwrap();
+
+        match stmt {
+            PartiQLStatement::Select(select) => {
+                assert_eq!(select.table_name, "users");
+                assert_eq!(select.limit, None);
+                assert_eq!(select.offset, Some(5));
+            }
+            _ => panic!("Expected SELECT statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_with_limit_and_offset() {
+        let sql = "SELECT * FROM users WHERE pk = 'user#123' LIMIT 20 OFFSET 10";
+        let stmt = PartiQLParser::parse(sql).unwrap();
+
+        match stmt {
+            PartiQLStatement::Select(select) => {
+                assert_eq!(select.table_name, "users");
+                assert_eq!(select.limit, Some(20));
+                assert_eq!(select.offset, Some(10));
+            }
+            _ => panic!("Expected SELECT statement"),
+        }
     }
 }

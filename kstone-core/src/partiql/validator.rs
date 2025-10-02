@@ -117,6 +117,8 @@ mod tests {
                 }],
             }),
             order_by: None,
+            limit: None,
+            offset: None,
         };
 
         let query_type = DynamoDBValidator::validate_select(&stmt).unwrap();
@@ -151,6 +153,8 @@ mod tests {
                 ],
             }),
             order_by: None,
+            limit: None,
+            offset: None,
         };
 
         let query_type = DynamoDBValidator::validate_select(&stmt).unwrap();
@@ -172,6 +176,8 @@ mod tests {
             select_list: SelectList::All,
             where_clause: None,
             order_by: None,
+            limit: None,
+            offset: None,
         };
 
         let query_type = DynamoDBValidator::validate_select(&stmt).unwrap();
@@ -192,6 +198,8 @@ mod tests {
                 }],
             }),
             order_by: None,
+            limit: None,
+            offset: None,
         };
 
         let query_type = DynamoDBValidator::validate_select(&stmt).unwrap();

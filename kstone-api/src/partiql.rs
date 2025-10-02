@@ -120,8 +120,38 @@ impl Database {
                         // Set scan direction
                         query = query.forward(forward);
 
+                        // Apply LIMIT - if both LIMIT and OFFSET, fetch enough records
+                        if let Some(limit) = select_stmt.limit {
+                            let fetch_limit = if let Some(offset) = select_stmt.offset {
+                                limit + offset
+                            } else {
+                                limit
+                            };
+                            query = query.limit(fetch_limit);
+                        }
+
                         // Execute query
-                        let response = self.query(query)?;
+                        let mut response = self.query(query)?;
+
+                        // Apply OFFSET if specified (by skipping items)
+                        if let Some(offset) = select_stmt.offset {
+                            if offset < response.items.len() {
+                                response.items = response.items.into_iter().skip(offset).collect();
+                                response.count = response.items.len();
+                            } else {
+                                // Offset is beyond results, return empty
+                                response.items.clear();
+                                response.count = 0;
+                            }
+                        }
+
+                        // Apply LIMIT if specified (truncate after offset)
+                        if let Some(limit) = select_stmt.limit {
+                            if response.items.len() > limit {
+                                response.items.truncate(limit);
+                                response.count = limit;
+                            }
+                        }
 
                         Ok(ExecuteStatementResponse::Select {
                             items: response.items,
@@ -148,6 +178,20 @@ impl Database {
                             all_items.extend(response.items);
                         }
 
+                        // Apply OFFSET if specified
+                        if let Some(offset) = select_stmt.offset {
+                            if offset < all_items.len() {
+                                all_items = all_items.into_iter().skip(offset).collect();
+                            } else {
+                                all_items.clear();
+                            }
+                        }
+
+                        // Apply LIMIT if specified
+                        if let Some(limit) = select_stmt.limit {
+                            all_items.truncate(limit);
+                        }
+
                         Ok(ExecuteStatementResponse::Select {
                             count: all_items.len(),
                             scanned_count: total_scanned,
@@ -157,13 +201,43 @@ impl Database {
                     }
                     SelectTranslation::Scan { filter_conditions } => {
                         // Execute Scan operation
-                        let scan = Scan::new();
+                        let mut scan = Scan::new();
+
+                        // Apply LIMIT - if both LIMIT and OFFSET, fetch enough records
+                        if let Some(limit) = select_stmt.limit {
+                            let fetch_limit = if let Some(offset) = select_stmt.offset {
+                                limit + offset
+                            } else {
+                                limit
+                            };
+                            scan = scan.limit(fetch_limit);
+                        }
 
                         // TODO: Apply filter conditions when scan supports filtering
                         // For now, we'll just execute the scan
                         let _ = filter_conditions; // Suppress unused warning
 
-                        let response = self.scan(scan)?;
+                        let mut response = self.scan(scan)?;
+
+                        // Apply OFFSET if specified (by skipping items)
+                        if let Some(offset) = select_stmt.offset {
+                            if offset < response.items.len() {
+                                response.items = response.items.into_iter().skip(offset).collect();
+                                response.count = response.items.len();
+                            } else {
+                                // Offset is beyond results, return empty
+                                response.items.clear();
+                                response.count = 0;
+                            }
+                        }
+
+                        // Apply LIMIT if specified (truncate after offset)
+                        if let Some(limit) = select_stmt.limit {
+                            if response.items.len() > limit {
+                                response.items.truncate(limit);
+                                response.count = limit;
+                            }
+                        }
 
                         Ok(ExecuteStatementResponse::Select {
                             items: response.items,
@@ -445,5 +519,89 @@ mod tests {
         let result = db.execute_statement(sql);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_statement_select_with_limit() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert multiple items
+        for i in 0..20 {
+            db.put(
+                format!("user#{:03}", i).as_bytes(),
+                ItemBuilder::new()
+                    .string("name", format!("User{}", i))
+                    .number("seq", i)
+                    .build(),
+            )
+            .unwrap();
+        }
+
+        // SELECT with LIMIT
+        let sql = "SELECT * FROM users LIMIT 5";
+        let response = db.execute_statement(sql).unwrap();
+
+        match response {
+            ExecuteStatementResponse::Select { items, count, .. } => {
+                assert_eq!(count, 5);
+                assert_eq!(items.len(), 5);
+            }
+            _ => panic!("Expected Select response"),
+        }
+    }
+
+    #[test]
+    fn test_execute_statement_select_with_offset() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert items
+        for i in 0..10 {
+            db.put(
+                format!("user#{:03}", i).as_bytes(),
+                ItemBuilder::new().number("seq", i).build(),
+            )
+            .unwrap();
+        }
+
+        // SELECT with OFFSET
+        let sql = "SELECT * FROM users OFFSET 5";
+        let response = db.execute_statement(sql).unwrap();
+
+        match response {
+            ExecuteStatementResponse::Select { items, count, .. } => {
+                assert_eq!(count, 5);
+                assert_eq!(items.len(), 5);
+            }
+            _ => panic!("Expected Select response"),
+        }
+    }
+
+    #[test]
+    fn test_execute_statement_select_with_limit_and_offset() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert items
+        for i in 0..20 {
+            db.put(
+                format!("user#{:03}", i).as_bytes(),
+                ItemBuilder::new().number("seq", i).build(),
+            )
+            .unwrap();
+        }
+
+        // SELECT with LIMIT and OFFSET
+        let sql = "SELECT * FROM users LIMIT 5 OFFSET 10";
+        let response = db.execute_statement(sql).unwrap();
+
+        match response {
+            ExecuteStatementResponse::Select { items, count, .. } => {
+                assert_eq!(count, 5);
+                assert_eq!(items.len(), 5);
+            }
+            _ => panic!("Expected Select response"),
+        }
     }
 }

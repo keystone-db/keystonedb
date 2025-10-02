@@ -28,6 +28,10 @@ pub struct SelectStatement {
     pub where_clause: Option<WhereClause>,
     /// ORDER BY clause
     pub order_by: Option<OrderBy>,
+    /// LIMIT clause (max number of items to return)
+    pub limit: Option<usize>,
+    /// OFFSET clause (number of items to skip)
+    pub offset: Option<usize>,
 }
 
 /// SELECT attribute list
