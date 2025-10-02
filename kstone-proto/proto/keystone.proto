@@ -85,6 +85,7 @@ message PutRequest {
   optional bytes sort_key = 2;
   Item item = 3;
   optional string condition_expression = 4;
+  map<string, Value> expression_values = 5;
 }
 
 message PutResponse {
@@ -114,6 +115,7 @@ message DeleteRequest {
   bytes partition_key = 1;
   optional bytes sort_key = 2;
   optional string condition_expression = 3;
+  map<string, Value> expression_values = 4;
 }
 
 message DeleteResponse {

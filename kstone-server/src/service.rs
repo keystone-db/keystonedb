@@ -146,20 +146,31 @@ impl KeystoneDb for KeystoneService {
                 .ok_or_else(|| Status::invalid_argument("Item required"))?,
         )?;
 
-        // TODO: Support condition_expression (needs expression context)
-        if req.condition_expression.is_some() {
-            return Err(Status::unimplemented(
-                "Conditional put not yet supported in server",
-            ));
-        }
-
         // Execute put operation (blocking DB call in spawn_blocking)
         let db = Arc::clone(&self.db);
         tokio::task::spawn_blocking(move || {
-            if let Some(sk_bytes) = sk {
-                db.put_with_sk(&pk, &sk_bytes, item)?;
+            // Check if this is a conditional put
+            if let Some(condition_expr) = req.condition_expression {
+                // Build expression context from expression_values
+                let mut context = kstone_core::expression::ExpressionContext::new();
+                for (placeholder, proto_value) in req.expression_values {
+                    let value = proto_value_to_ks(proto_value)
+                        .map_err(|_| KsError::InvalidExpression(format!("Invalid expression value for {}", placeholder)))?;
+                    context = context.with_value(placeholder, value);
+                }
+
+                if let Some(sk_bytes) = sk {
+                    db.put_conditional_with_sk(&pk, &sk_bytes, item, &condition_expr, context)?;
+                } else {
+                    db.put_conditional(&pk, item, &condition_expr, context)?;
+                }
             } else {
-                db.put(&pk, item)?;
+                // Regular put without condition
+                if let Some(sk_bytes) = sk {
+                    db.put_with_sk(&pk, &sk_bytes, item)?;
+                } else {
+                    db.put(&pk, item)?;
+                }
             }
             Ok::<_, KsError>(())
         })
@@ -218,20 +229,31 @@ impl KeystoneDb for KeystoneService {
             sort_key: req.sort_key,
         });
 
-        // TODO: Support condition_expression (needs expression context)
-        if req.condition_expression.is_some() {
-            return Err(Status::unimplemented(
-                "Conditional delete not yet supported in server",
-            ));
-        }
-
         // Execute delete operation
         let db = Arc::clone(&self.db);
         tokio::task::spawn_blocking(move || {
-            if let Some(sk_bytes) = sk {
-                db.delete_with_sk(&pk, &sk_bytes)?;
+            // Check if this is a conditional delete
+            if let Some(condition_expr) = req.condition_expression {
+                // Build expression context from expression_values
+                let mut context = kstone_core::expression::ExpressionContext::new();
+                for (placeholder, proto_value) in req.expression_values {
+                    let value = proto_value_to_ks(proto_value)
+                        .map_err(|_| KsError::InvalidExpression(format!("Invalid expression value for {}", placeholder)))?;
+                    context = context.with_value(placeholder, value);
+                }
+
+                if let Some(sk_bytes) = sk {
+                    db.delete_conditional_with_sk(&pk, &sk_bytes, &condition_expr, context)?;
+                } else {
+                    db.delete_conditional(&pk, &condition_expr, context)?;
+                }
             } else {
-                db.delete(&pk)?;
+                // Regular delete without condition
+                if let Some(sk_bytes) = sk {
+                    db.delete_with_sk(&pk, &sk_bytes)?;
+                } else {
+                    db.delete(&pk)?;
+                }
             }
             Ok::<_, KsError>(())
         })
@@ -485,32 +507,237 @@ impl KeystoneDb for KeystoneService {
     /// Transactional get
     async fn transact_get(
         &self,
-        _request: Request<proto::TransactGetRequest>,
+        request: Request<proto::TransactGetRequest>,
     ) -> Result<Response<proto::TransactGetResponse>, Status> {
-        Err(Status::unimplemented("TransactGet not yet implemented"))
+        let req = request.into_inner();
+
+        // Build transact get request with all keys
+        let mut transact_request = kstone_api::TransactGetRequest::new();
+        for proto_key in req.keys {
+            let core_key = proto_key_to_core_key(proto_key);
+            if let Some(sk) = &core_key.sk {
+                transact_request = transact_request.get_with_sk(&core_key.pk, sk);
+            } else {
+                transact_request = transact_request.get(&core_key.pk);
+            }
+        }
+
+        // Execute transactional get
+        let db = Arc::clone(&self.db);
+        let response = tokio::task::spawn_blocking(move || db.transact_get(transact_request))
+            .await
+            .map_err(|e| Status::internal(format!("Task join error: {}", e)))?
+            .map_err(map_error)?;
+
+        // Convert response items to protobuf
+        let items: Vec<proto::TransactGetItem> = response
+            .items
+            .iter()
+            .map(|item_opt| proto::TransactGetItem {
+                item: item_opt.as_ref().map(ks_item_to_proto),
+            })
+            .collect();
+
+        Ok(Response::new(proto::TransactGetResponse {
+            items,
+            error: None,
+        }))
     }
 
     /// Transactional write
     async fn transact_write(
         &self,
-        _request: Request<proto::TransactWriteRequest>,
+        request: Request<proto::TransactWriteRequest>,
     ) -> Result<Response<proto::TransactWriteResponse>, Status> {
-        Err(Status::unimplemented("TransactWrite not yet implemented"))
+        use proto::transact_write_item::Item as ProtoTxItem;
+
+        let req = request.into_inner();
+
+        // Build transact write request with all operations
+        let mut transact_request = kstone_api::TransactWriteRequest::new();
+
+        for item in req.items {
+            let proto_item = item
+                .item
+                .ok_or_else(|| Status::invalid_argument("TransactWriteItem is required"))?;
+
+            match proto_item {
+                ProtoTxItem::Put(put) => {
+                    let key = if let Some(sk) = put.sort_key {
+                        kstone_core::Key::with_sk(
+                            Bytes::from(put.partition_key),
+                            Bytes::from(sk),
+                        )
+                    } else {
+                        kstone_core::Key::new(Bytes::from(put.partition_key))
+                    };
+
+                    let item = proto_item_to_ks(
+                        put.item
+                            .ok_or_else(|| Status::invalid_argument("Item required for put"))?,
+                    )?;
+
+                    transact_request.operations.push(kstone_api::TransactWriteOp::Put {
+                        key,
+                        item,
+                        condition: put.condition_expression,
+                    });
+                }
+                ProtoTxItem::Update(update) => {
+                    let key = if let Some(sk) = update.sort_key {
+                        kstone_core::Key::with_sk(
+                            Bytes::from(update.partition_key),
+                            Bytes::from(sk),
+                        )
+                    } else {
+                        kstone_core::Key::new(Bytes::from(update.partition_key))
+                    };
+
+                    transact_request
+                        .operations
+                        .push(kstone_api::TransactWriteOp::Update {
+                            key,
+                            update_expression: update.update_expression,
+                            condition: update.condition_expression,
+                        });
+                }
+                ProtoTxItem::Delete(delete) => {
+                    let key = if let Some(sk) = delete.sort_key {
+                        kstone_core::Key::with_sk(
+                            Bytes::from(delete.partition_key),
+                            Bytes::from(sk),
+                        )
+                    } else {
+                        kstone_core::Key::new(Bytes::from(delete.partition_key))
+                    };
+
+                    transact_request
+                        .operations
+                        .push(kstone_api::TransactWriteOp::Delete {
+                            key,
+                            condition: delete.condition_expression,
+                        });
+                }
+                ProtoTxItem::ConditionCheck(check) => {
+                    let key = if let Some(sk) = check.sort_key {
+                        kstone_core::Key::with_sk(
+                            Bytes::from(check.partition_key),
+                            Bytes::from(sk),
+                        )
+                    } else {
+                        kstone_core::Key::new(Bytes::from(check.partition_key))
+                    };
+
+                    transact_request
+                        .operations
+                        .push(kstone_api::TransactWriteOp::ConditionCheck {
+                            key,
+                            condition: check.condition_expression,
+                        });
+                }
+            }
+        }
+
+        // Execute transactional write
+        let db = Arc::clone(&self.db);
+        tokio::task::spawn_blocking(move || db.transact_write(transact_request))
+            .await
+            .map_err(|e| Status::internal(format!("Task join error: {}", e)))?
+            .map_err(map_error)?;
+
+        Ok(Response::new(proto::TransactWriteResponse {
+            success: true,
+            error: None,
+        }))
     }
 
     /// Update an item
     async fn update(
         &self,
-        _request: Request<proto::UpdateRequest>,
+        request: Request<proto::UpdateRequest>,
     ) -> Result<Response<proto::UpdateResponse>, Status> {
-        Err(Status::unimplemented("Update not yet implemented"))
+        let req = request.into_inner();
+
+        // Build update operation
+        let mut update = if let Some(sk) = req.sort_key {
+            kstone_api::Update::with_sk(&req.partition_key, &sk)
+        } else {
+            kstone_api::Update::new(&req.partition_key)
+        };
+
+        // Set update expression
+        update = update.expression(req.update_expression);
+
+        // Set condition if present
+        if let Some(condition) = req.condition_expression {
+            update = update.condition(condition);
+        }
+
+        // Add expression values
+        for (placeholder, proto_value) in req.expression_values {
+            let value = proto_value_to_ks(proto_value)?;
+            update = update.value(placeholder, value);
+        }
+
+        // Execute update
+        let db = Arc::clone(&self.db);
+        let response = tokio::task::spawn_blocking(move || db.update(update))
+            .await
+            .map_err(|e| Status::internal(format!("Task join error: {}", e)))?
+            .map_err(map_error)?;
+
+        Ok(Response::new(proto::UpdateResponse {
+            item: Some(ks_item_to_proto(&response.item)),
+            error: None,
+        }))
     }
 
     /// Execute a PartiQL statement
     async fn execute_statement(
         &self,
-        _request: Request<proto::ExecuteStatementRequest>,
+        request: Request<proto::ExecuteStatementRequest>,
     ) -> Result<Response<proto::ExecuteStatementResponse>, Status> {
-        Err(Status::unimplemented("ExecuteStatement not yet implemented"))
+        use proto::execute_statement_response::Response as ProtoStmtResponse;
+
+        let req = request.into_inner();
+
+        // Execute the statement
+        let db = Arc::clone(&self.db);
+        let statement = req.statement;
+        let response = tokio::task::spawn_blocking(move || db.execute_statement(&statement))
+            .await
+            .map_err(|e| Status::internal(format!("Task join error: {}", e)))?
+            .map_err(map_error)?;
+
+        // Convert response based on statement type
+        let proto_response = match response {
+            kstone_api::ExecuteStatementResponse::Select {
+                items,
+                count,
+                scanned_count,
+                last_key,
+            } => ProtoStmtResponse::Select(proto::SelectResult {
+                items: items.iter().map(ks_item_to_proto).collect(),
+                count: count as u32,
+                scanned_count: scanned_count as u32,
+                last_key: ks_last_key_opt_to_proto(last_key),
+            }),
+            kstone_api::ExecuteStatementResponse::Insert { success } => {
+                ProtoStmtResponse::Insert(proto::InsertResult { success })
+            }
+            kstone_api::ExecuteStatementResponse::Update { item } => {
+                ProtoStmtResponse::Update(proto::UpdateResult {
+                    item: Some(ks_item_to_proto(&item)),
+                })
+            }
+            kstone_api::ExecuteStatementResponse::Delete { success } => {
+                ProtoStmtResponse::Delete(proto::DeleteResult { success })
+            }
+        };
+
+        Ok(Response::new(proto::ExecuteStatementResponse {
+            response: Some(proto_response),
+            error: None,
+        }))
     }
 }
