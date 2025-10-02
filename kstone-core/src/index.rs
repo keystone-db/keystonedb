@@ -123,6 +123,9 @@ pub struct TableSchema {
     /// TTL attribute name (Phase 3.3+)
     /// When set, items with this attribute containing a timestamp in the past are considered expired
     pub ttl_attribute_name: Option<String>,
+    /// Stream configuration (Phase 3.4+)
+    #[serde(default)]
+    pub stream_config: crate::stream::StreamConfig,
 }
 
 impl TableSchema {
@@ -159,6 +162,15 @@ impl TableSchema {
     /// in the past will be considered expired and automatically deleted.
     pub fn with_ttl(mut self, attribute_name: impl Into<String>) -> Self {
         self.ttl_attribute_name = Some(attribute_name.into());
+        self
+    }
+
+    /// Enable streams (Change Data Capture) with the specified configuration (Phase 3.4+)
+    ///
+    /// Streams capture all item-level modifications (INSERT, MODIFY, REMOVE) and
+    /// make them available for processing.
+    pub fn with_stream(mut self, config: crate::stream::StreamConfig) -> Self {
+        self.stream_config = config;
         self
     }
 

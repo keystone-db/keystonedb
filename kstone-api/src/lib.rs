@@ -7,6 +7,7 @@ pub use kstone_core::{
     Error as KeystoneError,
     Value as KeystoneValue,
     index::{LocalSecondaryIndex, GlobalSecondaryIndex, IndexProjection, TableSchema},
+    stream::{StreamRecord, StreamEventType, StreamViewType, StreamConfig},
 };
 
 pub mod query;
@@ -290,6 +291,14 @@ impl Database {
 
         let committed = self.engine.transact_write(&operations, request.context())?;
         Ok(TransactWriteResponse::new(committed))
+    }
+
+    /// Read stream records (Phase 3.4+)
+    ///
+    /// Returns all stream records in the buffer.
+    /// Optionally provide after_sequence_number to only get records after that sequence number.
+    pub fn read_stream(&self, after_sequence_number: Option<u64>) -> Result<Vec<StreamRecord>> {
+        self.engine.read_stream(after_sequence_number)
     }
 }
 
@@ -1500,6 +1509,165 @@ mod tests {
         // Should be expired and return None
         let result = db.get(b"item#1").unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_database_stream_insert() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with streams enabled
+        let schema = TableSchema::new()
+            .with_stream(StreamConfig::enabled());
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put an item
+        db.put(b"user#1", ItemBuilder::new()
+            .string("name", "Alice")
+            .build()).unwrap();
+
+        // Read stream
+        let records = db.read_stream(None).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].event_type, StreamEventType::Insert);
+        assert!(records[0].new_image.is_some());
+        assert!(records[0].old_image.is_none());
+    }
+
+    #[test]
+    fn test_database_stream_modify() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        let schema = TableSchema::new()
+            .with_stream(StreamConfig::enabled());
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put initial item
+        db.put(b"user#1", ItemBuilder::new()
+            .string("name", "Alice")
+            .build()).unwrap();
+
+        // Update the item
+        db.put(b"user#1", ItemBuilder::new()
+            .string("name", "Bob")
+            .build()).unwrap();
+
+        // Read stream
+        let records = db.read_stream(None).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].event_type, StreamEventType::Insert);
+        assert_eq!(records[1].event_type, StreamEventType::Modify);
+        assert!(records[1].old_image.is_some());
+        assert!(records[1].new_image.is_some());
+    }
+
+    #[test]
+    fn test_database_stream_remove() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        let schema = TableSchema::new()
+            .with_stream(StreamConfig::enabled());
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put an item
+        db.put(b"user#1", ItemBuilder::new()
+            .string("name", "Alice")
+            .build()).unwrap();
+
+        // Delete the item
+        db.delete(b"user#1").unwrap();
+
+        // Read stream
+        let records = db.read_stream(None).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].event_type, StreamEventType::Insert);
+        assert_eq!(records[1].event_type, StreamEventType::Remove);
+        assert!(records[1].old_image.is_some());
+        assert!(records[1].new_image.is_none());
+    }
+
+    #[test]
+    fn test_database_stream_view_type_keys_only() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        let schema = TableSchema::new()
+            .with_stream(StreamConfig::enabled().with_view_type(StreamViewType::KeysOnly));
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put an item
+        db.put(b"user#1", ItemBuilder::new()
+            .string("name", "Alice")
+            .build()).unwrap();
+
+        // Read stream
+        let records = db.read_stream(None).unwrap();
+
+        assert_eq!(records.len(), 1);
+        // Keys only - no images
+        assert!(records[0].old_image.is_none());
+        assert!(records[0].new_image.is_none());
+    }
+
+    #[test]
+    fn test_database_stream_after_sequence() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        let schema = TableSchema::new()
+            .with_stream(StreamConfig::enabled());
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put multiple items
+        db.put(b"item#1", ItemBuilder::new().string("data", "1").build()).unwrap();
+        db.put(b"item#2", ItemBuilder::new().string("data", "2").build()).unwrap();
+        db.put(b"item#3", ItemBuilder::new().string("data", "3").build()).unwrap();
+
+        // Get all records
+        let all_records = db.read_stream(None).unwrap();
+        assert_eq!(all_records.len(), 3);
+
+        // Get only records after first sequence number
+        let first_seq = all_records[0].sequence_number;
+        let filtered_records = db.read_stream(Some(first_seq)).unwrap();
+        assert_eq!(filtered_records.len(), 2);
+    }
+
+    #[test]
+    fn test_database_stream_buffer_limit() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with small buffer
+        let schema = TableSchema::new()
+            .with_stream(StreamConfig::enabled().with_buffer_size(5));
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put 10 items (exceeds buffer size)
+        for i in 1..=10 {
+            db.put(format!("item#{}", i).as_bytes(), ItemBuilder::new()
+                .string("data", format!("{}", i))
+                .build()).unwrap();
+        }
+
+        // Stream should only contain last 5 records
+        let records = db.read_stream(None).unwrap();
+        assert_eq!(records.len(), 5);
+
+        // Verify it's the most recent records
+        assert_eq!(records[0].sequence_number, 6);
+        assert_eq!(records[4].sequence_number, 10);
     }
 }
 

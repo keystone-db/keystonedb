@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. Currently in **Phase 3 (Indexes)** - implementing DynamoDB-style secondary indexes (LSI and GSI).
+KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. **Phase 3 (Indexes) is COMPLETE** with full support for LSI, GSI, TTL, and Streams.
 
 **Target:** Eventually a full Dynamo-model database with cloud sync, FTS/vector indexes, and attachment to DynamoDB or remote KeystoneDB instances.
 
@@ -1017,6 +1017,129 @@ let result = db.get(b"permanent#1")?;
 assert!(result.is_some());
 ```
 
+### Streams (Change Data Capture) (Phase 3.4+)
+
+#### Creating a table with streams
+```rust
+use kstone_api::{Database, TableSchema, StreamConfig, StreamViewType};
+
+// Enable streams with default settings (NEW_AND_OLD_IMAGES)
+let schema = TableSchema::new()
+    .with_stream(StreamConfig::enabled());
+let db = Database::create_with_schema(path, schema)?;
+
+// Configure stream view type
+let schema = TableSchema::new()
+    .with_stream(
+        StreamConfig::enabled()
+            .with_view_type(StreamViewType::NewImage)
+            .with_buffer_size(500)
+    );
+let db = Database::create_with_schema(path, schema)?;
+```
+
+#### Stream view types
+```rust
+// KeysOnly - Only key information (no item data)
+StreamViewType::KeysOnly
+
+// NewImage - Only the new state of the item
+StreamViewType::NewImage
+
+// OldImage - Only the previous state of the item
+StreamViewType::OldImage
+
+// NewAndOldImages - Both states (default)
+StreamViewType::NewAndOldImages
+```
+
+#### Reading stream records
+```rust
+// Get all stream records
+let records = db.read_stream(None)?;
+
+for record in records {
+    match record.event_type {
+        StreamEventType::Insert => {
+            println!("INSERT: {:?}", record.new_image);
+        }
+        StreamEventType::Modify => {
+            println!("MODIFY: {:?} -> {:?}", record.old_image, record.new_image);
+        }
+        StreamEventType::Remove => {
+            println!("REMOVE: {:?}", record.old_image);
+        }
+    }
+}
+```
+
+#### Polling for new changes
+```rust
+let mut last_sequence = None;
+
+loop {
+    // Get only new records since last poll
+    let records = db.read_stream(last_sequence)?;
+
+    if records.is_empty() {
+        // No new changes
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        continue;
+    }
+
+    for record in &records {
+        // Process record
+        process_change(record);
+    }
+
+    // Update last sequence for next poll
+    last_sequence = records.last().map(|r| r.sequence_number);
+}
+```
+
+#### Stream record structure
+```rust
+pub struct StreamRecord {
+    pub sequence_number: u64,        // Globally unique, monotonic
+    pub event_type: StreamEventType,  // Insert, Modify, or Remove
+    pub key: Key,                     // Item key
+    pub old_image: Option<Item>,      // Before state (if applicable)
+    pub new_image: Option<Item>,      // After state (if applicable)
+    pub timestamp: i64,               // Milliseconds since epoch
+}
+```
+
+#### Stream buffer and retention
+```rust
+// Streams use an in-memory circular buffer
+// Old records are dropped when buffer is full
+
+let schema = TableSchema::new()
+    .with_stream(
+        StreamConfig::enabled()
+            .with_buffer_size(1000)  // Keep last 1000 records
+    );
+```
+
+#### Example: Audit log
+```rust
+let schema = TableSchema::new()
+    .with_stream(StreamConfig::enabled());
+let db = Database::create_with_schema(path, schema)?;
+
+// Perform operations
+db.put(b"user#123", ItemBuilder::new().string("name", "Alice").build())?;
+db.put(b"user#123", ItemBuilder::new().string("name", "Bob").build())?;
+db.delete(b"user#123")?;
+
+// Read audit trail
+let records = db.read_stream(None)?;
+assert_eq!(records.len(), 3);
+assert_eq!(records[0].event_type, StreamEventType::Insert);
+assert_eq!(records[1].event_type, StreamEventType::Modify);
+assert_eq!(records[2].event_type, StreamEventType::Remove);
+```
+
 ### Transactions (Phase 2.7+)
 
 #### Transact get - atomic reads
@@ -1478,6 +1601,22 @@ All sub-phases 2.1-2.7 implemented with full DynamoDB-compatible API.
 - New tests: test_ttl_*, test_database_ttl_lazy_deletion, test_database_ttl_query_filter, test_database_ttl_scan_filter, test_database_ttl_no_ttl_attribute, test_database_ttl_timestamp_value_type
 - All tests passing (115 core + 55 API = 170 tests + 6 integration = 176 total)
 
+*Phase 3.4 Streams (Change Data Capture) - COMPLETE ✅*
+- StreamRecord struct captures item-level changes (INSERT, MODIFY, REMOVE)
+- StreamViewType enum controls what data is included (KeysOnly, NewImage, OldImage, NewAndOldImages)
+- StreamConfig for enabling/configuring streams with buffer size
+- TableSchema.stream_config field and with_stream() builder method
+- In-memory circular buffer (VecDeque) stores recent changes
+- Automatic stream record emission during put() and delete() operations
+- LsmEngine.read_stream(after_sequence_number) for reading records
+- Database.read_stream() API method
+- Supports polling for new changes via sequence number filtering
+- New module: stream.rs with 7 unit tests
+- New tests: test_stream_*, test_database_stream_insert, test_database_stream_modify, test_database_stream_remove, test_database_stream_view_type_keys_only, test_database_stream_after_sequence, test_database_stream_buffer_limit
+- All tests passing (122 core + 61 API = 183 tests + 6 integration = 189 total)
+
+**Phase 3 (Indexes) - COMPLETE ✅**
+All sub-phases 3.1-3.4 implemented with complete DynamoDB-style secondary indexes, TTL, and streams.
+
 **Future phases** (not yet implemented):
-- Phase 3.4: Streams (Change Data Capture)
 - Phase 4+: Attachment framework (DynamoDB sync, remote KeystoneDB sync)

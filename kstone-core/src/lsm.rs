@@ -39,6 +39,7 @@ struct LsmInner {
     next_seq: SeqNo,       // Global sequence number
     next_sst_id: u64,      // Global SST ID counter
     schema: TableSchema,   // Index definitions (Phase 3.1+)
+    stream_buffer: std::collections::VecDeque<crate::stream::StreamRecord>,  // Stream records (Phase 3.4+)
 }
 
 /// Transaction write operation (Phase 2.7+)
@@ -105,6 +106,7 @@ impl LsmEngine {
                 next_seq: 1,
                 next_sst_id: 1,
                 schema,
+                stream_buffer: std::collections::VecDeque::new(),
             })),
         })
     }
@@ -176,6 +178,7 @@ impl LsmEngine {
                 next_seq: max_seq + 1,
                 next_sst_id: max_sst_id + 1,
                 schema: TableSchema::new(), // TODO: Load from manifest in future
+                stream_buffer: std::collections::VecDeque::new(),
             })),
         })
     }
@@ -183,6 +186,15 @@ impl LsmEngine {
     /// Put an item
     pub fn put(&self, key: Key, item: Item) -> Result<()> {
         let mut inner = self.inner.write();
+
+        // Check if item exists (for stream record) (Phase 3.4+)
+        let old_image = if inner.schema.stream_config.enabled {
+            let stripe_id = key.stripe() as usize;
+            let key_enc = key.encode().to_vec();
+            inner.stripes[stripe_id].memtable.get(&key_enc).and_then(|r| r.value.clone())
+        } else {
+            None
+        };
 
         let seq = inner.next_seq;
         inner.next_seq += 1;
@@ -206,6 +218,27 @@ impl LsmEngine {
         // Materialize GSI entries (Phase 3.2+)
         if !inner.schema.global_indexes.is_empty() {
             self.materialize_gsi_entries(&mut inner, &key, &item)?;
+        }
+
+        // Emit stream record (Phase 3.4+)
+        if inner.schema.stream_config.enabled {
+            let stream_record = if let Some(old) = old_image {
+                crate::stream::StreamRecord::modify(
+                    seq,
+                    key.clone(),
+                    old,
+                    item.clone(),
+                    inner.schema.stream_config.view_type,
+                )
+            } else {
+                crate::stream::StreamRecord::insert(
+                    seq,
+                    key.clone(),
+                    item.clone(),
+                    inner.schema.stream_config.view_type,
+                )
+            };
+            self.emit_stream_record(&mut inner, stream_record);
         }
 
         // Check if this stripe needs to flush
@@ -279,10 +312,19 @@ impl LsmEngine {
     pub fn delete(&self, key: Key) -> Result<()> {
         let mut inner = self.inner.write();
 
+        // Check if item exists (for stream record) (Phase 3.4+)
+        let old_image = if inner.schema.stream_config.enabled {
+            let stripe_id = key.stripe() as usize;
+            let key_enc = key.encode().to_vec();
+            inner.stripes[stripe_id].memtable.get(&key_enc).and_then(|r| r.value.clone())
+        } else {
+            None
+        };
+
         let seq = inner.next_seq;
         inner.next_seq += 1;
 
-        let record = Record::delete(key, seq);
+        let record = Record::delete(key.clone(), seq);
 
         // Write to WAL
         inner.wal.append(record.clone())?;
@@ -292,6 +334,19 @@ impl LsmEngine {
         let stripe_id = record.key.stripe() as usize;
         let key_enc = record.key.encode().to_vec();
         inner.stripes[stripe_id].memtable.insert(key_enc, record);
+
+        // Emit stream record (Phase 3.4+)
+        if inner.schema.stream_config.enabled {
+            if let Some(old) = old_image {
+                let stream_record = crate::stream::StreamRecord::remove(
+                    seq,
+                    key.clone(),
+                    old,
+                    inner.schema.stream_config.view_type,
+                );
+                self.emit_stream_record(&mut inner, stream_record);
+            }
+        }
 
         // Check if this stripe needs to flush
         if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
@@ -829,6 +884,47 @@ impl LsmEngine {
         }
 
         Ok(())
+    }
+
+    /// Read stream records (Phase 3.4+)
+    ///
+    /// Returns all stream records in the buffer, ordered by sequence number (oldest first).
+    /// Optionally filter to only records with sequence number > after_sequence_number.
+    pub fn read_stream(&self, after_sequence_number: Option<u64>) -> Result<Vec<crate::stream::StreamRecord>> {
+        let inner = self.inner.read();
+
+        if !inner.schema.stream_config.enabled {
+            return Ok(Vec::new());
+        }
+
+        let records: Vec<crate::stream::StreamRecord> = inner.stream_buffer
+            .iter()
+            .filter(|record| {
+                if let Some(after) = after_sequence_number {
+                    record.sequence_number > after
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect();
+
+        Ok(records)
+    }
+
+    /// Emit a stream record if streams are enabled (Phase 3.4+)
+    fn emit_stream_record(&self, inner: &mut LsmInner, record: crate::stream::StreamRecord) {
+        if !inner.schema.stream_config.enabled {
+            return;
+        }
+
+        // Add to buffer
+        inner.stream_buffer.push_back(record);
+
+        // Trim buffer if it exceeds max size
+        while inner.stream_buffer.len() > inner.schema.stream_config.buffer_size {
+            inner.stream_buffer.pop_front();
+        }
     }
 
     /// Flush a specific stripe's memtable to SST

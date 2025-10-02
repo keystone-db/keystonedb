@@ -14,6 +14,7 @@ pub mod lsm;
 pub mod iterator; // Phase 2.1+ query/scan support
 pub mod expression; // Phase 2.3+ expression system
 pub mod index; // Phase 3.1+ index support (LSI, GSI)
+pub mod stream; // Phase 3.4+ change data capture (streams)
 
 pub use error::{Error, Result};
 pub use types::*;
