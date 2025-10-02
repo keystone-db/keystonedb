@@ -3,7 +3,11 @@ use bytes::Bytes;
 use std::path::Path;
 use std::collections::HashMap;
 
-pub use kstone_core::{Error as KeystoneError, Value as KeystoneValue};
+pub use kstone_core::{
+    Error as KeystoneError,
+    Value as KeystoneValue,
+    index::{LocalSecondaryIndex, GlobalSecondaryIndex, IndexProjection, TableSchema},
+};
 
 pub mod query;
 pub use query::{Query, QueryResponse};
@@ -29,6 +33,12 @@ impl Database {
     /// Create a new database at the specified path
     pub fn create(path: impl AsRef<Path>) -> Result<Self> {
         let engine = LsmEngine::create(path)?;
+        Ok(Self { engine })
+    }
+
+    /// Create a new database with a table schema (Phase 3.1+)
+    pub fn create_with_schema(path: impl AsRef<Path>, schema: TableSchema) -> Result<Self> {
+        let engine = LsmEngine::create_with_schema(path, schema)?;
         Ok(Self { engine })
     }
 
@@ -1069,4 +1079,32 @@ mod tests {
         assert!(db.get(b"item#2").unwrap().is_none()); // First put should be rolled back
         assert!(db.get(b"item#3").unwrap().is_none());
     }
+
+    #[test]
+    fn test_database_create_with_lsi() {
+        let dir = TempDir::new().unwrap();
+
+        // Create schema with LSI on email attribute
+        let schema = TableSchema::new()
+            .add_local_index(LocalSecondaryIndex::new("email-index", "email"));
+
+        let db = Database::create_with_schema(dir.path(), schema).unwrap();
+
+        // Put an item with email attribute
+        let item = ItemBuilder::new()
+            .string("name", "Alice")
+            .string("email", "alice@example.com")
+            .number("age", 30)
+            .build();
+
+        db.put(b"user#123", item).unwrap();
+
+        // Verify the base record was stored
+        let retrieved = db.get(b"user#123").unwrap();
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().get("email").unwrap().as_string().unwrap(), "alice@example.com");
+
+        // TODO: Add query by index once query support is implemented
+    }
 }
+

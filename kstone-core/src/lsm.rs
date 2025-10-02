@@ -1,6 +1,8 @@
-use crate::{Error, Result, Record, Key, Item, SeqNo, wal::Wal, sst::{SstWriter, SstReader}};
+use crate::{Error, Result, Record, Key, Item, SeqNo, Value, wal::Wal, sst::{SstWriter, SstReader}};
 use crate::iterator::{QueryParams, QueryResult, ScanParams, ScanResult};
 use crate::expression::{UpdateAction, UpdateExecutor, ExpressionContext, Expr, ExpressionEvaluator};
+use crate::index::{TableSchema, encode_index_key};
+use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -36,6 +38,7 @@ struct LsmInner {
     stripes: Vec<Stripe>,  // 256 stripes
     next_seq: SeqNo,       // Global sequence number
     next_sst_id: u64,      // Global SST ID counter
+    schema: TableSchema,   // Index definitions (Phase 3.1+)
 }
 
 /// Transaction write operation (Phase 2.7+)
@@ -76,6 +79,11 @@ impl TransactWriteOperation {
 impl LsmEngine {
     /// Create a new database
     pub fn create(dir: impl AsRef<Path>) -> Result<Self> {
+        Self::create_with_schema(dir, TableSchema::new())
+    }
+
+    /// Create a new database with a table schema (Phase 3.1+)
+    pub fn create_with_schema(dir: impl AsRef<Path>, schema: TableSchema) -> Result<Self> {
         let dir = dir.as_ref();
         fs::create_dir_all(dir)?;
 
@@ -96,6 +104,7 @@ impl LsmEngine {
                 stripes,
                 next_seq: 1,
                 next_sst_id: 1,
+                schema,
             })),
         })
     }
@@ -166,6 +175,7 @@ impl LsmEngine {
                 stripes,
                 next_seq: max_seq + 1,
                 next_sst_id: max_sst_id + 1,
+                schema: TableSchema::new(), // TODO: Load from manifest in future
             })),
         })
     }
@@ -177,7 +187,7 @@ impl LsmEngine {
         let seq = inner.next_seq;
         inner.next_seq += 1;
 
-        let record = Record::put(key, item, seq);
+        let record = Record::put(key.clone(), item.clone(), seq);
 
         // Write to WAL
         inner.wal.append(record.clone())?;
@@ -187,6 +197,11 @@ impl LsmEngine {
         let stripe_id = record.key.stripe() as usize;
         let key_enc = record.key.encode().to_vec();
         inner.stripes[stripe_id].memtable.insert(key_enc, record);
+
+        // Materialize LSI entries (Phase 3.1+)
+        if !inner.schema.local_indexes.is_empty() {
+            self.materialize_lsi_entries(&mut inner, &key, &item)?;
+        }
 
         // Check if this stripe needs to flush
         if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
@@ -635,6 +650,49 @@ impl LsmEngine {
         }
 
         Ok(ScanResult::new(items, last_key, scanned_count))
+    }
+
+    /// Materialize LSI entries for an item (Phase 3.1+)
+    fn materialize_lsi_entries(&self, inner: &mut LsmInner, key: &Key, item: &Item) -> Result<()> {
+        // For each LSI defined in the schema
+        for lsi in &inner.schema.local_indexes {
+            // Extract the index sort key value from the item
+            if let Some(index_sk_value) = item.get(&lsi.sort_key_attribute) {
+                // Convert Value to Bytes for the index key
+                let index_sk_bytes = match index_sk_value {
+                    Value::S(s) => Bytes::copy_from_slice(s.as_bytes()),
+                    Value::N(n) => Bytes::copy_from_slice(n.as_bytes()),
+                    Value::B(b) => b.clone(),
+                    Value::Bool(b) => Bytes::copy_from_slice(if *b { b"true" } else { b"false" }),
+                    Value::Ts(ts) => Bytes::copy_from_slice(&ts.to_le_bytes()),
+                    _ => continue, // Skip unsupported types for now
+                };
+
+                // Create index key
+                let index_key_encoded = encode_index_key(&lsi.name, &key.pk, &index_sk_bytes);
+
+                // Create index record with the full item (or projected attributes based on projection type)
+                let index_item = item.clone(); // For now, always store full item
+
+                // Create a synthetic Key from the encoded bytes
+                // Index records use the base table's PK + encoded index info
+                let index_key = Key::new(Bytes::copy_from_slice(&index_key_encoded));
+
+                let seq = inner.next_seq;
+                inner.next_seq += 1;
+
+                let index_record = Record::put(index_key, index_item, seq);
+
+                // Write index record to WAL
+                inner.wal.append(index_record.clone())?;
+
+                // Add to memtable (route to same stripe as base record for locality)
+                let stripe_id = key.stripe() as usize;
+                inner.stripes[stripe_id].memtable.insert(index_key_encoded, index_record);
+            }
+        }
+
+        Ok(())
     }
 
     /// Flush a specific stripe's memtable to SST
