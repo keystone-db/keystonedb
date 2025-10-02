@@ -4,6 +4,7 @@
 /// to the database over the network.
 
 pub mod convert;
+pub mod metrics;
 pub mod service;
 
 // Re-export key types

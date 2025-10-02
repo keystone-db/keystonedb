@@ -58,3 +58,8 @@ base64 = "0.22"
 # Testing
 proptest = "1.4"
 tempfile = "3.8"
+
+# Observability
+prometheus = "0.13"
+lazy_static = "1.4"
+axum = "0.7"

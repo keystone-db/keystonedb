@@ -2,9 +2,10 @@
 ///
 /// Starts a gRPC server that exposes the KeystoneDB API over the network.
 
+use axum::{routing::get, Router};
 use clap::Parser;
 use kstone_api::Database;
-use kstone_server::{KeystoneDbServer, KeystoneService};
+use kstone_server::{KeystoneDbServer, KeystoneService, metrics};
 use std::path::PathBuf;
 use tonic::transport::Server;
 use tracing::info;
@@ -27,6 +28,21 @@ struct Args {
     host: String,
 }
 
+async fn metrics_handler() -> String {
+    metrics::encode_metrics().unwrap_or_else(|e| {
+        tracing::error!("Failed to encode metrics: {}", e);
+        String::from("# Error encoding metrics\n")
+    })
+}
+
+async fn health_handler() -> &'static str {
+    "OK"
+}
+
+async fn ready_handler() -> &'static str {
+    "OK"
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing with environment filter
@@ -44,6 +60,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_level(true)
         .init();
 
+    // Initialize Prometheus metrics
+    metrics::register_metrics();
+    info!("Initialized Prometheus metrics");
+
     // Parse command line arguments
     let args = Args::parse();
 
@@ -58,14 +78,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create gRPC service
     let service = KeystoneService::new(db);
-    let addr = format!("{}:{}", args.host, args.port).parse()?;
+    let grpc_addr = format!("{}:{}", args.host, args.port).parse()?;
 
-    info!("Starting KeystoneDB server on {}", addr);
+    info!("Starting KeystoneDB gRPC server on {}", grpc_addr);
 
-    // Start server
+    // Create HTTP server for metrics and health checks
+    let metrics_app = Router::new()
+        .route("/metrics", get(metrics_handler))
+        .route("/health", get(health_handler))
+        .route("/ready", get(ready_handler));
+    let metrics_addr = format!("{}:9090", args.host);
+
+    info!("Starting HTTP server on {} with /metrics, /health, /ready endpoints", metrics_addr);
+
+    // Spawn metrics server as background task
+    let metrics_listener = tokio::net::TcpListener::bind(&metrics_addr).await?;
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(metrics_listener, metrics_app).await {
+            tracing::error!("Metrics server error: {}", e);
+        }
+    });
+
+    // Start gRPC server (blocks until shutdown)
     Server::builder()
         .add_service(KeystoneDbServer::new(service))
-        .serve(addr)
+        .serve(grpc_addr)
         .await?;
 
     Ok(())

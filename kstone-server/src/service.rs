@@ -10,8 +10,10 @@ use kstone_proto::{self as proto, keystone_db_server::KeystoneDb};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument};
+use uuid::Uuid;
 
 use crate::convert::*;
+use crate::metrics::{RPC_REQUESTS_TOTAL, RPC_DURATION_SECONDS};
 
 /// KeystoneDB gRPC service implementation
 pub struct KeystoneService {
@@ -129,11 +131,18 @@ fn apply_sort_key_condition(
 #[tonic::async_trait]
 impl KeystoneDb for KeystoneService {
     /// Put an item into the database
-    #[instrument(skip(self, request), fields(has_sk, has_condition))]
+    #[instrument(skip(self, request), fields(trace_id, has_sk, has_condition))]
     async fn put(
         &self,
         request: Request<proto::PutRequest>,
     ) -> Result<Response<proto::PutResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
+        // Start timing
+        let timer = RPC_DURATION_SECONDS.with_label_values(&["put"]).start_timer();
+
         info!("Received put request");
         let req = request.into_inner();
 
@@ -185,6 +194,8 @@ impl KeystoneDb for KeystoneService {
 
         match result {
             Ok(_) => {
+                timer.observe_duration();
+                RPC_REQUESTS_TOTAL.with_label_values(&["put", "success"]).inc();
                 info!("Put operation completed successfully");
                 Ok(Response::new(proto::PutResponse {
                     success: true,
@@ -192,6 +203,8 @@ impl KeystoneDb for KeystoneService {
                 }))
             }
             Err(e) => {
+                timer.observe_duration();
+                RPC_REQUESTS_TOTAL.with_label_values(&["put", "error"]).inc();
                 error!(?e, "Put operation failed");
                 Err(map_error(e))
             }
@@ -199,11 +212,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Get an item from the database
-    #[instrument(skip(self, request), fields(has_sk, found))]
+    #[instrument(skip(self, request), fields(trace_id, has_sk, found))]
     async fn get(
         &self,
         request: Request<proto::GetRequest>,
     ) -> Result<Response<proto::GetResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         info!("Received get request");
         let req = request.into_inner();
 
@@ -244,10 +261,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Delete an item from the database
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn delete(
         &self,
         request: Request<proto::DeleteRequest>,
     ) -> Result<Response<proto::DeleteResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         let req = request.into_inner();
 
         // Convert key
@@ -305,10 +327,15 @@ impl KeystoneDb for KeystoneService {
     // - execute_statement
 
     /// Query items by partition key
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn query(
         &self,
         request: Request<proto::QueryRequest>,
     ) -> Result<Response<proto::QueryResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         let req = request.into_inner();
 
         // Build query starting with partition key
@@ -369,10 +396,15 @@ impl KeystoneDb for KeystoneService {
         futures::future::Ready<Result<proto::ScanResponse, Status>>,
     >;
 
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn scan(
         &self,
         request: Request<proto::ScanRequest>,
     ) -> Result<Response<Self::ScanStream>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         let req = request.into_inner();
 
         // Build scan starting with defaults
@@ -430,10 +462,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Batch get multiple items
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn batch_get(
         &self,
         request: Request<proto::BatchGetRequest>,
     ) -> Result<Response<proto::BatchGetResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         let req = request.into_inner();
 
         // Convert protobuf keys to core Keys
@@ -469,10 +506,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Batch write multiple items
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn batch_write(
         &self,
         request: Request<proto::BatchWriteRequest>,
     ) -> Result<Response<proto::BatchWriteResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         use proto::write_request::Request as WriteRequestEnum;
 
         let req = request.into_inner();
@@ -532,10 +574,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Transactional get
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn transact_get(
         &self,
         request: Request<proto::TransactGetRequest>,
     ) -> Result<Response<proto::TransactGetResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         let req = request.into_inner();
 
         // Build transact get request with all keys
@@ -572,10 +619,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Transactional write
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn transact_write(
         &self,
         request: Request<proto::TransactWriteRequest>,
     ) -> Result<Response<proto::TransactWriteResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         use proto::transact_write_item::Item as ProtoTxItem;
 
         let req = request.into_inner();
@@ -679,10 +731,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Update an item
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn update(
         &self,
         request: Request<proto::UpdateRequest>,
     ) -> Result<Response<proto::UpdateResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         let req = request.into_inner();
 
         // Build update operation
@@ -720,10 +777,15 @@ impl KeystoneDb for KeystoneService {
     }
 
     /// Execute a PartiQL statement
+    #[instrument(skip(self, request), fields(trace_id))]
     async fn execute_statement(
         &self,
         request: Request<proto::ExecuteStatementRequest>,
     ) -> Result<Response<proto::ExecuteStatementResponse>, Status> {
+        // Generate trace ID for request correlation
+        let trace_id = Uuid::new_v4().to_string();
+        tracing::Span::current().record("trace_id", &trace_id);
+
         use proto::execute_statement_response::Response as ProtoStmtResponse;
 
         let req = request.into_inner();
