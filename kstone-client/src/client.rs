@@ -95,6 +95,40 @@ impl Client {
             .map(|_| ())
     }
 
+    /// Put an item with a condition expression
+    ///
+    /// # Arguments
+    /// * `pk` - Partition key
+    /// * `item` - Item to store
+    /// * `condition` - Condition expression (e.g., "attribute_not_exists(pk)")
+    /// * `values` - Expression attribute values
+    pub async fn put_conditional(
+        &mut self,
+        pk: &[u8],
+        item: Item,
+        condition: impl Into<String>,
+        values: std::collections::HashMap<String, kstone_core::Value>,
+    ) -> Result<()> {
+        let proto_values: std::collections::HashMap<String, proto::Value> = values
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::convert::ks_value_to_proto(v)))
+            .collect();
+
+        let request = proto::PutRequest {
+            partition_key: pk.to_vec(),
+            sort_key: None,
+            item: Some(crate::convert::ks_item_to_proto(&item)),
+            condition_expression: Some(condition.into()),
+            expression_values: proto_values,
+        };
+
+        self.inner
+            .put(request)
+            .await
+            .map_err(|e| e.into())
+            .map(|_| ())
+    }
+
     /// Get an item with a simple partition key
     ///
     /// # Arguments
@@ -178,6 +212,37 @@ impl Client {
             sort_key: Some(sk.to_vec()),
             condition_expression: None,
             expression_values: std::collections::HashMap::new(),
+        };
+
+        self.inner
+            .delete(request)
+            .await
+            .map_err(|e| e.into())
+            .map(|_| ())
+    }
+
+    /// Delete an item with a condition expression
+    ///
+    /// # Arguments
+    /// * `pk` - Partition key
+    /// * `condition` - Condition expression (e.g., "attribute_exists(pk)")
+    /// * `values` - Expression attribute values
+    pub async fn delete_conditional(
+        &mut self,
+        pk: &[u8],
+        condition: impl Into<String>,
+        values: std::collections::HashMap<String, kstone_core::Value>,
+    ) -> Result<()> {
+        let proto_values: std::collections::HashMap<String, proto::Value> = values
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::convert::ks_value_to_proto(v)))
+            .collect();
+
+        let request = proto::DeleteRequest {
+            partition_key: pk.to_vec(),
+            sort_key: None,
+            condition_expression: Some(condition.into()),
+            expression_values: proto_values,
         };
 
         self.inner
