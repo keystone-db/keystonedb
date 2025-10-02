@@ -1,0 +1,30 @@
+[package]
+name = "kstone-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Internal
+kstone-proto = { path = "../kstone-proto" }
+kstone-core = { path = "../kstone-core" }
+
+# gRPC
+tonic = { workspace = true }
+prost = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Serialization
+bytes = { workspace = true }
+
+[dev-dependencies]
+kstone-api = { path = "../kstone-api" }
+kstone-server = { path = "../kstone-server" }
+tempfile = { workspace = true }

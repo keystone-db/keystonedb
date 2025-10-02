@@ -5,6 +5,7 @@ members = [
     "kstone-cli",
     "kstone-proto",
     "kstone-server",
+    "kstone-client",
     "kstone-tests",
 ]
 resolver = "2"
