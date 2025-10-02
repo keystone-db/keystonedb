@@ -207,6 +207,82 @@ impl Client {
         query.execute(&mut self.inner).await
     }
 
+    /// Execute a scan operation
+    ///
+    /// # Arguments
+    /// * `scan` - Scan builder with options
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::{Client, RemoteScan};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = Client::connect("http://localhost:50051").await?;
+    ///
+    /// let scan = RemoteScan::new()
+    ///     .limit(100);
+    ///
+    /// let response = client.scan(scan).await?;
+    /// println!("Scanned {} items", response.count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn scan(&mut self, scan: crate::scan::RemoteScan) -> Result<crate::scan::RemoteScanResponse> {
+        scan.execute(&mut self.inner).await
+    }
+
+    /// Execute a batch get operation
+    ///
+    /// # Arguments
+    /// * `request` - Batch get request with keys
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::{Client, RemoteBatchGetRequest};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = Client::connect("http://localhost:50051").await?;
+    ///
+    /// let batch = RemoteBatchGetRequest::new()
+    ///     .add_key(b"user#1")
+    ///     .add_key(b"user#2");
+    ///
+    /// let response = client.batch_get(batch).await?;
+    /// println!("Retrieved {} items", response.count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn batch_get(&mut self, request: crate::batch::RemoteBatchGetRequest) -> Result<crate::batch::RemoteBatchGetResponse> {
+        request.execute(&mut self.inner).await
+    }
+
+    /// Execute a batch write operation
+    ///
+    /// # Arguments
+    /// * `request` - Batch write request with puts/deletes
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::{Client, RemoteBatchWriteRequest};
+    /// # use std::collections::HashMap;
+    /// # use kstone_core::Value;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = Client::connect("http://localhost:50051").await?;
+    ///
+    /// let mut item = HashMap::new();
+    /// item.insert("name".to_string(), Value::S("Alice".to_string()));
+    ///
+    /// let batch = RemoteBatchWriteRequest::new()
+    ///     .put(b"user#1", item.clone())
+    ///     .delete(b"user#old");
+    ///
+    /// let response = client.batch_write(batch).await?;
+    /// println!("Batch write success: {}", response.success);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn batch_write(&mut self, request: crate::batch::RemoteBatchWriteRequest) -> Result<crate::batch::RemoteBatchWriteResponse> {
+        request.execute(&mut self.inner).await
+    }
+
     /// Get a reference to the underlying gRPC client
     pub(crate) fn inner_mut(&mut self) -> &mut KeystoneDbClient<Channel> {
         &mut self.inner
