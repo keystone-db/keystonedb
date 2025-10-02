@@ -73,11 +73,12 @@ cargo run --bin kstone-server -- --db-path <path> --port 50051
 ## Architecture
 
 ### Workspace Structure
-This is a Cargo workspace with 6 crates:
+This is a Cargo workspace with 7 crates:
 - **kstone-core**: Storage engine internals (WAL, SST, LSM)
 - **kstone-api**: Public API wrapping the core engine
 - **kstone-proto**: Protocol Buffers definitions for gRPC
 - **kstone-server**: gRPC server implementation
+- **kstone-client**: gRPC client library for remote access
 - **kstone-cli**: Command-line binary for local database access
 - **kstone-tests**: Integration tests
 
@@ -1789,10 +1790,50 @@ db.snapshot_to_disk("backup.keystone")?;
 - Error mapping from KeystoneDB to gRPC Status codes
 - Server binary with CLI (`kstone-server --db-path <path> --port 50051`)
 
-*Phase 6.3 Stubbed Methods*
+*Phase 6.3 Stubbed Methods (Server)*
 - TransactGet/TransactWrite return UNIMPLEMENTED (requires transaction coordinator)
 - Update returns UNIMPLEMENTED (requires update expression parsing)
 - ExecuteStatement returns UNIMPLEMENTED (requires PartiQL parser)
+
+*Phase 6.4 Client Library - COMPLETE ✅*
+- Rust gRPC client for remote database access (kstone-client crate)
+- Connection management: `Client::connect(addr)`
+- CRUD operations: put, get, delete (with/without sort keys)
+- Remote query: `RemoteQuery` builder with all sort key conditions
+- Remote scan: `RemoteScan` builder with streaming support
+- Batch operations: `RemoteBatchGetRequest`, `RemoteBatchWriteRequest`
+- Comprehensive error handling (maps gRPC Status to ClientError)
+- Integration tests validating client-server communication
+
+**Client Usage Example:**
+```rust
+use kstone_client::{Client, RemoteQuery, Value};
+use std::collections::HashMap;
+
+// Connect to server
+let mut client = Client::connect("http://localhost:50051").await?;
+
+// Put an item
+let mut item = HashMap::new();
+item.insert("name".to_string(), Value::S("Alice".to_string()));
+item.insert("age".to_string(), Value::N("30".to_string()));
+client.put(b"user#123", item).await?;
+
+// Get an item
+let retrieved = client.get(b"user#123").await?;
+
+// Query with conditions
+let query = RemoteQuery::new(b"org#acme")
+    .sk_begins_with(b"USER#")
+    .limit(10);
+let results = client.query(query).await?;
+
+// Batch operations
+let batch = RemoteBatchGetRequest::new()
+    .add_key(b"user#1")
+    .add_key(b"user#2");
+let items = client.batch_get(batch).await?;
+```
 
 **Phase 7: Interactive CLI (Not Yet Implemented)**
 REPL-style interactive query editor with autocomplete.
