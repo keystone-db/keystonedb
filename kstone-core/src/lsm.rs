@@ -38,6 +38,41 @@ struct LsmInner {
     next_sst_id: u64,      // Global SST ID counter
 }
 
+/// Transaction write operation (Phase 2.7+)
+#[derive(Debug, Clone)]
+pub enum TransactWriteOperation {
+    /// Put an item with optional condition
+    Put {
+        item: Item,
+        condition: Option<Expr>,
+    },
+    /// Update an item with optional condition
+    Update {
+        actions: Vec<UpdateAction>,
+        condition: Option<Expr>,
+    },
+    /// Delete an item with optional condition
+    Delete {
+        condition: Option<Expr>,
+    },
+    /// Condition check only (no write)
+    ConditionCheck {
+        condition: Expr,
+    },
+}
+
+impl TransactWriteOperation {
+    /// Get the condition expression if present
+    pub fn condition(&self) -> Option<&Expr> {
+        match self {
+            Self::Put { condition, .. } => condition.as_ref(),
+            Self::Update { condition, .. } => condition.as_ref(),
+            Self::Delete { condition } => condition.as_ref(),
+            Self::ConditionCheck { condition } => Some(condition),
+        }
+    }
+}
+
 impl LsmEngine {
     /// Create a new database
     pub fn create(dir: impl AsRef<Path>) -> Result<Self> {
@@ -405,6 +440,142 @@ impl LsmEngine {
         }
 
         Ok(processed)
+    }
+
+    /// Transaction get - read multiple items atomically (Phase 2.7+)
+    pub fn transact_get(&self, keys: &[Key]) -> Result<Vec<Option<Item>>> {
+        // Hold read lock for consistent snapshot
+        let _inner = self.inner.read();
+
+        let mut items = Vec::new();
+        for key in keys {
+            let item = self.get(key)?;
+            items.push(item);
+        }
+
+        Ok(items)
+    }
+
+    /// Transaction write - write multiple items atomically with conditions (Phase 2.7+)
+    pub fn transact_write(
+        &self,
+        operations: &[(Key, TransactWriteOperation)],
+        context: &ExpressionContext,
+    ) -> Result<usize> {
+        // Acquire write lock for atomicity
+        let mut inner = self.inner.write();
+
+        // Phase 1: Read all items and check all conditions
+        let mut current_items: Vec<Option<Item>> = Vec::new();
+        for (key, op) in operations {
+            let item = {
+                let stripe_id = key.stripe() as usize;
+                let stripe = &inner.stripes[stripe_id];
+                let key_enc = key.encode().to_vec();
+
+                // Check memtable
+                if let Some(record) = stripe.memtable.get(&key_enc) {
+                    record.value.clone()
+                } else {
+                    // Check SSTs
+                    let mut found = None;
+                    for sst in &stripe.ssts {
+                        if let Some(record) = sst.get(key) {
+                            found = record.value.clone();
+                            break;
+                        }
+                    }
+                    found
+                }
+            };
+
+            current_items.push(item.clone());
+
+            // Check condition if present
+            if let Some(condition_expr) = op.condition() {
+                let current_item = item.unwrap_or_else(|| std::collections::HashMap::new());
+                let evaluator = ExpressionEvaluator::new(&current_item, context);
+                let condition_passed = evaluator.evaluate(condition_expr)?;
+
+                if !condition_passed {
+                    return Err(Error::TransactionCanceled(format!(
+                        "Condition failed for key {:?}",
+                        key
+                    )));
+                }
+            }
+        }
+
+        // Phase 2: All conditions passed, perform all writes
+        let mut committed = 0;
+        for (i, (key, op)) in operations.iter().enumerate() {
+            match op {
+                TransactWriteOperation::Put { item, .. } => {
+                    // Perform put (without going through public API to avoid nested locks)
+                    let seq = inner.next_seq;
+                    inner.next_seq += 1;
+                    let record = Record::put(key.clone(), item.clone(), seq);
+                    inner.wal.append(record.clone())?;
+                    inner.wal.flush()?;
+
+                    let stripe_id = record.key.stripe() as usize;
+                    let key_enc = record.key.encode().to_vec();
+                    inner.stripes[stripe_id].memtable.insert(key_enc, record);
+
+                    if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
+                        self.flush_stripe(&mut inner, stripe_id)?;
+                    }
+
+                    committed += 1;
+                }
+                TransactWriteOperation::Delete { .. } => {
+                    // Perform delete
+                    let seq = inner.next_seq;
+                    inner.next_seq += 1;
+                    let record = Record::delete(key.clone(), seq);
+                    inner.wal.append(record.clone())?;
+                    inner.wal.flush()?;
+
+                    let stripe_id = record.key.stripe() as usize;
+                    let key_enc = record.key.encode().to_vec();
+                    inner.stripes[stripe_id].memtable.insert(key_enc, record);
+
+                    if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
+                        self.flush_stripe(&mut inner, stripe_id)?;
+                    }
+
+                    committed += 1;
+                }
+                TransactWriteOperation::Update { actions, .. } => {
+                    // Perform update
+                    let current_item = current_items[i].clone().unwrap_or_else(|| std::collections::HashMap::new());
+                    let executor = UpdateExecutor::new(context);
+                    let updated_item = executor.execute(&current_item, actions)?;
+
+                    let seq = inner.next_seq;
+                    inner.next_seq += 1;
+                    let record = Record::put(key.clone(), updated_item, seq);
+                    inner.wal.append(record.clone())?;
+                    inner.wal.flush()?;
+
+                    let stripe_id = record.key.stripe() as usize;
+                    let key_enc = record.key.encode().to_vec();
+                    inner.stripes[stripe_id].memtable.insert(key_enc, record);
+
+                    if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
+                        self.flush_stripe(&mut inner, stripe_id)?;
+                    }
+
+                    committed += 1;
+                }
+                TransactWriteOperation::ConditionCheck { .. } => {
+                    // Condition already checked in phase 1, no write needed
+                    committed += 1;
+                }
+            }
+        }
+
+        Ok(committed)
     }
 
     /// Scan all items across all stripes (Phase 2.2+)

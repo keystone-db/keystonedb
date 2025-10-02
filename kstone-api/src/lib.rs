@@ -17,6 +17,9 @@ pub use update::{Update, UpdateResponse};
 pub mod batch;
 pub use batch::{BatchGetRequest, BatchGetResponse, BatchWriteRequest, BatchWriteResponse, BatchWriteItem};
 
+pub mod transaction;
+pub use transaction::{TransactGetRequest, TransactGetResponse, TransactWriteRequest, TransactWriteResponse, TransactWriteOp};
+
 /// KeystoneDB Database handle
 pub struct Database {
     engine: LsmEngine,
@@ -204,6 +207,79 @@ impl Database {
 
         let processed = self.engine.batch_write(&operations)?;
         Ok(BatchWriteResponse::new(processed))
+    }
+
+    /// Transactional get - read multiple items atomically (Phase 2.7+)
+    pub fn transact_get(&self, request: TransactGetRequest) -> Result<TransactGetResponse> {
+        let items = self.engine.transact_get(request.keys())?;
+        Ok(TransactGetResponse::new(items))
+    }
+
+    /// Transactional write - write multiple items atomically with conditions (Phase 2.7+)
+    pub fn transact_write(&self, request: TransactWriteRequest) -> Result<TransactWriteResponse> {
+        use kstone_core::{TransactWriteOperation, expression::ExpressionParser};
+
+        // Convert API operations to core operations
+        let mut operations = Vec::new();
+
+        for op in request.operations() {
+            match op {
+                TransactWriteOp::Put { key, item, condition } => {
+                    let condition_expr = if let Some(cond_str) = condition {
+                        Some(ExpressionParser::parse(cond_str)?)
+                    } else {
+                        None
+                    };
+                    operations.push((
+                        key.clone(),
+                        TransactWriteOperation::Put {
+                            item: item.clone(),
+                            condition: condition_expr,
+                        },
+                    ));
+                }
+                TransactWriteOp::Update { key, update_expression, condition } => {
+                    let actions = kstone_core::expression::UpdateExpressionParser::parse(update_expression)?;
+                    let condition_expr = if let Some(cond_str) = condition {
+                        Some(ExpressionParser::parse(cond_str)?)
+                    } else {
+                        None
+                    };
+                    operations.push((
+                        key.clone(),
+                        TransactWriteOperation::Update {
+                            actions,
+                            condition: condition_expr,
+                        },
+                    ));
+                }
+                TransactWriteOp::Delete { key, condition } => {
+                    let condition_expr = if let Some(cond_str) = condition {
+                        Some(ExpressionParser::parse(cond_str)?)
+                    } else {
+                        None
+                    };
+                    operations.push((
+                        key.clone(),
+                        TransactWriteOperation::Delete {
+                            condition: condition_expr,
+                        },
+                    ));
+                }
+                TransactWriteOp::ConditionCheck { key, condition } => {
+                    let condition_expr = ExpressionParser::parse(condition)?;
+                    operations.push((
+                        key.clone(),
+                        TransactWriteOperation::ConditionCheck {
+                            condition: condition_expr,
+                        },
+                    ));
+                }
+            }
+        }
+
+        let committed = self.engine.transact_write(&operations, request.context())?;
+        Ok(TransactWriteResponse::new(committed))
     }
 }
 
@@ -802,5 +878,195 @@ mod tests {
         assert!(db.get(b"key#1").unwrap().is_none());
         assert!(db.get(b"key#2").unwrap().is_some());
         assert!(db.get_with_sk(b"user#1", b"profile").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_database_transact_get_basic() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert items
+        db.put(b"user#1", ItemBuilder::new().string("name", "Alice").build()).unwrap();
+        db.put(b"user#2", ItemBuilder::new().string("name", "Bob").build()).unwrap();
+
+        // Transact get
+        let request = TransactGetRequest::new()
+            .get(b"user#1")
+            .get(b"user#2");
+
+        let response = db.transact_get(request).unwrap();
+        assert_eq!(response.items.len(), 2);
+        assert!(response.items[0].is_some());
+        assert!(response.items[1].is_some());
+    }
+
+    #[test]
+    fn test_database_transact_get_missing_items() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert only one item
+        db.put(b"user#1", ItemBuilder::new().string("name", "Alice").build()).unwrap();
+
+        // Get existing and non-existing
+        let request = TransactGetRequest::new()
+            .get(b"user#1")
+            .get(b"user#2"); // Doesn't exist
+
+        let response = db.transact_get(request).unwrap();
+        assert_eq!(response.items.len(), 2);
+        assert!(response.items[0].is_some());
+        assert!(response.items[1].is_none());
+    }
+
+    #[test]
+    fn test_database_transact_write_puts() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Transaction with multiple puts
+        let request = TransactWriteRequest::new()
+            .put(b"user#1", ItemBuilder::new().string("name", "Alice").build())
+            .put(b"user#2", ItemBuilder::new().string("name", "Bob").build());
+
+        let response = db.transact_write(request).unwrap();
+        assert_eq!(response.committed_count, 2);
+
+        // Verify both items exist
+        assert!(db.get(b"user#1").unwrap().is_some());
+        assert!(db.get(b"user#2").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_database_transact_write_with_condition_success() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Put initial item
+        db.put(b"account#1", ItemBuilder::new().number("balance", 100).build()).unwrap();
+
+        // Transaction: put if not exists (should fail), update if balance >= amount (should succeed)
+        let request = TransactWriteRequest::new()
+            .put(b"account#2", ItemBuilder::new().number("balance", 200).build())
+            .update_with_condition(
+                b"account#1",
+                "SET balance = balance - :amount",
+                "balance >= :amount"
+            )
+            .value(":amount", kstone_core::Value::number(50));
+
+        let response = db.transact_write(request).unwrap();
+        assert_eq!(response.committed_count, 2);
+
+        // Verify account#1 balance decreased
+        let item = db.get(b"account#1").unwrap().unwrap();
+        match item.get("balance").unwrap() {
+            kstone_core::Value::N(n) => assert_eq!(n, "50"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_database_transact_write_condition_failure() {
+        use kstone_core::Error;
+
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Put item with low balance
+        db.put(b"account#1", ItemBuilder::new().number("balance", 10).build()).unwrap();
+
+        // Try to withdraw more than balance (should fail)
+        let request = TransactWriteRequest::new()
+            .update_with_condition(
+                b"account#1",
+                "SET balance = balance - :amount",
+                "balance >= :amount"
+            )
+            .value(":amount", kstone_core::Value::number(100));
+
+        let result = db.transact_write(request);
+        assert!(matches!(result, Err(Error::TransactionCanceled(_))));
+
+        // Verify balance unchanged
+        let item = db.get(b"account#1").unwrap().unwrap();
+        match item.get("balance").unwrap() {
+            kstone_core::Value::N(n) => assert_eq!(n, "10"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn test_database_transact_write_mixed_operations() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Insert initial data
+        db.put(b"user#1", ItemBuilder::new().string("status", "active").build()).unwrap();
+        db.put(b"user#2", ItemBuilder::new().string("status", "inactive").build()).unwrap();
+
+        // Transaction with put, update, delete, and condition check
+        let request = TransactWriteRequest::new()
+            .put(b"user#3", ItemBuilder::new().string("name", "Charlie").build())
+            .update(b"user#1", "SET status = :status")
+            .delete(b"user#2")
+            .condition_check(b"user#1", "attribute_exists(status)")
+            .value(":status", kstone_core::Value::string("premium"));
+
+        let response = db.transact_write(request).unwrap();
+        assert_eq!(response.committed_count, 4);
+
+        // Verify all operations
+        assert!(db.get(b"user#3").unwrap().is_some()); // New item
+        let user1 = db.get(b"user#1").unwrap().unwrap();
+        assert_eq!(user1.get("status").unwrap().as_string().unwrap(), "premium"); // Updated
+        assert!(db.get(b"user#2").unwrap().is_none()); // Deleted
+    }
+
+    #[test]
+    fn test_database_transact_write_condition_check_only() {
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Put item
+        db.put(b"user#1", ItemBuilder::new().string("email", "alice@example.com").build()).unwrap();
+
+        // Transaction with only condition check (no actual write)
+        let request = TransactWriteRequest::new()
+            .condition_check(b"user#1", "attribute_exists(email)");
+
+        let response = db.transact_write(request).unwrap();
+        assert_eq!(response.committed_count, 1);
+
+        // Item should be unchanged
+        let item = db.get(b"user#1").unwrap().unwrap();
+        assert_eq!(item.get("email").unwrap().as_string().unwrap(), "alice@example.com");
+    }
+
+    #[test]
+    fn test_database_transact_write_atomicity() {
+        use kstone_core::Error;
+
+        let dir = TempDir::new().unwrap();
+        let db = Database::create(dir.path()).unwrap();
+
+        // Put initial items
+        db.put(b"item#1", ItemBuilder::new().number("value", 1).build()).unwrap();
+
+        // Transaction where second operation fails
+        let request = TransactWriteRequest::new()
+            .put(b"item#2", ItemBuilder::new().number("value", 2).build())
+            .put_with_condition(
+                b"item#3",
+                ItemBuilder::new().number("value", 3).build(),
+                "attribute_exists(nonexistent)" // This will fail
+            );
+
+        let result = db.transact_write(request);
+        assert!(matches!(result, Err(Error::TransactionCanceled(_))));
+
+        // Verify nothing was committed (atomicity)
+        assert!(db.get(b"item#2").unwrap().is_none()); // First put should be rolled back
+        assert!(db.get(b"item#3").unwrap().is_none());
     }
 }

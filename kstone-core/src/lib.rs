@@ -16,3 +16,4 @@ pub mod expression; // Phase 2.3+ expression system
 
 pub use error::{Error, Result};
 pub use types::*;
+pub use lsm::TransactWriteOperation;

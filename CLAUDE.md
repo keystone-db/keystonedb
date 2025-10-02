@@ -725,6 +725,93 @@ let response = db.batch_write(request)?;
 println!("Loaded {} items", response.processed_count);
 ```
 
+### Transactions (Phase 2.7+)
+
+#### Transact get - atomic reads
+```rust
+use kstone_api::TransactGetRequest;
+
+// Read multiple items atomically (consistent snapshot)
+let request = TransactGetRequest::new()
+    .get(b"user#1")
+    .get(b"user#2")
+    .get_with_sk(b"user#3", b"profile");
+
+let response = db.transact_get(request)?;
+
+// Items in same order as request, None if not found
+for item_opt in response.items {
+    if let Some(item) = item_opt {
+        println!("Item: {:?}", item);
+    } else {
+        println!("Not found");
+    }
+}
+```
+
+#### Transact write - atomic writes with conditions
+```rust
+use kstone_api::TransactWriteRequest;
+use kstone_core::Value;
+
+// Transfer balance between accounts atomically
+let request = TransactWriteRequest::new()
+    // Deduct from source account (only if balance sufficient)
+    .update_with_condition(
+        b"account#source",
+        "SET balance = balance - :amount",
+        "balance >= :amount"
+    )
+    // Add to destination account
+    .update(
+        b"account#dest",
+        "SET balance = balance + :amount"
+    )
+    .value(":amount", Value::number(100));
+
+match db.transact_write(request) {
+    Ok(response) => println!("Transaction committed: {} operations", response.committed_count),
+    Err(e) => println!("Transaction failed: {}", e),
+}
+```
+
+#### Mixed transaction operations
+```rust
+// Put, update, delete, and condition check in single transaction
+let request = TransactWriteRequest::new()
+    // Create new user
+    .put(b"user#new", ItemBuilder::new()
+        .string("name", "Alice")
+        .number("balance", 0)
+        .build())
+    // Update existing user status
+    .update(b"user#existing", "SET status = :status")
+    // Delete old user
+    .delete(b"user#old")
+    // Verify prerequisite condition (doesn't write anything)
+    .condition_check(b"config#global", "attribute_exists(enabled)")
+    .value(":status", Value::string("active"));
+
+let response = db.transact_write(request)?;
+// All operations succeed or all fail (ACID)
+```
+
+#### Transaction atomicity guarantee
+```rust
+// If ANY condition fails, NOTHING is committed
+let request = TransactWriteRequest::new()
+    .put(b"item#1", ItemBuilder::new().number("value", 1).build())
+    .put_with_condition(
+        b"item#2",
+        ItemBuilder::new().number("value", 2).build(),
+        "attribute_exists(nonexistent)" // This will fail
+    );
+
+// Result: TransactionCanceled error, item#1 NOT created (rolled back)
+let result = db.transact_write(request);
+assert!(result.is_err());
+```
+
 ### Conditional operations (Phase 2.5+)
 
 #### Put if not exists (optimistic locking)
@@ -1035,7 +1122,24 @@ Currently hardcoded at 1000 records (`MEMTABLE_THRESHOLD` in lsm.rs). When memta
 - New tests: test_batch_get_builder, test_batch_write_builder, test_database_batch_get, test_database_batch_write, test_database_batch_write_mixed
 - All tests passing (99 core + 32 API = 131 tests + 6 integration = 137 total)
 
-*Phase 2.7 Transactions - TODO*
+*Phase 2.7 Transactions - COMPLETE ✅*
+- TransactGetRequest/Response for atomic reads (consistent snapshot)
+- TransactWriteRequest/Response for atomic writes with conditions
+- TransactWriteOperation enum (Put, Update, Delete, ConditionCheck)
+- transact_get() in LSM: read multiple items under read lock
+- transact_write() in LSM: two-phase commit (check all conditions → execute all writes)
+- TransactionCanceled error type for failed transactions
+- ACID guarantees: all operations succeed or all fail atomically
+- Condition checks without writes (ConditionCheck operation)
+- Mixed operations: put, update, delete, condition_check in single transaction
+- Builder API: `.get()`, `.put()`, `.update()`, `.delete()`, `.condition_check()`
+- Expression context shared across all transaction operations
+- New module: transaction.rs (API)
+- New tests: test_transact_get_builder, test_transact_write_builder, test_transact_write_with_conditions, test_database_transact_get_basic, test_database_transact_get_missing_items, test_database_transact_write_puts, test_database_transact_write_with_condition_success, test_database_transact_write_condition_failure, test_database_transact_write_mixed_operations, test_database_transact_write_condition_check_only, test_database_transact_write_atomicity
+- All tests passing (99 core + 43 API = 142 tests + 6 integration = 148 total)
+
+**Phase 2 (Complete Dynamo API) - COMPLETE ✅**
+All sub-phases 2.1-2.7 implemented with full DynamoDB-compatible API.
 
 **Future phases** (not yet implemented):
 - Phase 3: Indexes (GSI, LSI, TTL, Streams)

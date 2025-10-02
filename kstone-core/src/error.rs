@@ -50,6 +50,10 @@ pub enum Error {
     // Phase 2.5 additions
     #[error("Conditional check failed: {0}")]
     ConditionalCheckFailed(String),
+
+    // Phase 2.7 additions
+    #[error("Transaction canceled: {0}")]
+    TransactionCanceled(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
