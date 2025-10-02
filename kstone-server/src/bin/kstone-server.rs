@@ -8,6 +8,7 @@ use kstone_server::{KeystoneDbServer, KeystoneService};
 use std::path::PathBuf;
 use tonic::transport::Server;
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(name = "kstone-server")]
@@ -28,9 +29,18 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
+    // Initialize tracing with environment filter
+    // Default to info level, can override with RUST_LOG env var
+    // Example: RUST_LOG=debug cargo run --bin kstone-server
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
     tracing_subscriber::fmt()
+        .with_env_filter(filter)
         .with_target(false)
+        .with_thread_ids(true)
+        .with_file(true)
+        .with_line_number(true)
         .with_level(true)
         .init();
 

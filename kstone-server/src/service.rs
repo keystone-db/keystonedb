@@ -9,6 +9,7 @@ use kstone_core::Error as KsError;
 use kstone_proto::{self as proto, keystone_db_server::KeystoneDb};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
+use tracing::{error, info, instrument};
 
 use crate::convert::*;
 
@@ -128,17 +129,22 @@ fn apply_sort_key_condition(
 #[tonic::async_trait]
 impl KeystoneDb for KeystoneService {
     /// Put an item into the database
+    #[instrument(skip(self, request), fields(has_sk, has_condition))]
     async fn put(
         &self,
         request: Request<proto::PutRequest>,
     ) -> Result<Response<proto::PutResponse>, Status> {
+        info!("Received put request");
         let req = request.into_inner();
 
         // Convert key
         let (pk, sk) = proto_key_to_ks(proto::Key {
-            partition_key: req.partition_key,
-            sort_key: req.sort_key,
+            partition_key: req.partition_key.clone(),
+            sort_key: req.sort_key.clone(),
         });
+
+        tracing::Span::current().record("has_sk", sk.is_some());
+        tracing::Span::current().record("has_condition", req.condition_expression.is_some());
 
         // Convert item
         let item = proto_item_to_ks(
@@ -148,7 +154,7 @@ impl KeystoneDb for KeystoneService {
 
         // Execute put operation (blocking DB call in spawn_blocking)
         let db = Arc::clone(&self.db);
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             // Check if this is a conditional put
             if let Some(condition_expr) = req.condition_expression {
                 // Build expression context from expression_values
@@ -175,20 +181,30 @@ impl KeystoneDb for KeystoneService {
             Ok::<_, KsError>(())
         })
         .await
-        .map_err(|e| Status::internal(format!("Task join error: {}", e)))?
-        .map_err(map_error)?;
+        .map_err(|e| Status::internal(format!("Task join error: {}", e)))?;
 
-        Ok(Response::new(proto::PutResponse {
-            success: true,
-            error: None,
-        }))
+        match result {
+            Ok(_) => {
+                info!("Put operation completed successfully");
+                Ok(Response::new(proto::PutResponse {
+                    success: true,
+                    error: None,
+                }))
+            }
+            Err(e) => {
+                error!(?e, "Put operation failed");
+                Err(map_error(e))
+            }
+        }
     }
 
     /// Get an item from the database
+    #[instrument(skip(self, request), fields(has_sk, found))]
     async fn get(
         &self,
         request: Request<proto::GetRequest>,
     ) -> Result<Response<proto::GetResponse>, Status> {
+        info!("Received get request");
         let req = request.into_inner();
 
         // Convert key
@@ -197,9 +213,11 @@ impl KeystoneDb for KeystoneService {
             sort_key: req.sort_key,
         });
 
+        tracing::Span::current().record("has_sk", sk.is_some());
+
         // Execute get operation
         let db = Arc::clone(&self.db);
-        let item_opt = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             if let Some(sk_bytes) = sk {
                 db.get_with_sk(&pk, &sk_bytes)
             } else {
@@ -207,13 +225,22 @@ impl KeystoneDb for KeystoneService {
             }
         })
         .await
-        .map_err(|e| Status::internal(format!("Task join error: {}", e)))?
-        .map_err(map_error)?;
+        .map_err(|e| Status::internal(format!("Task join error: {}", e)))?;
 
-        Ok(Response::new(proto::GetResponse {
-            item: item_opt.map(|item| ks_item_to_proto(&item)),
-            error: None,
-        }))
+        match result {
+            Ok(item_opt) => {
+                tracing::Span::current().record("found", item_opt.is_some());
+                info!("Get operation completed");
+                Ok(Response::new(proto::GetResponse {
+                    item: item_opt.map(|item| ks_item_to_proto(&item)),
+                    error: None,
+                }))
+            }
+            Err(e) => {
+                error!(?e, "Get operation failed");
+                Err(map_error(e))
+            }
+        }
     }
 
     /// Delete an item from the database
