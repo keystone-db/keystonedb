@@ -47,7 +47,7 @@ impl Client {
     /// # use std::collections::HashMap;
     /// # use kstone_core::Value;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = Client::connect("http://localhost:50051").await?;
+    /// let mut client = Client::connect("http://localhost:50051").await?;
     ///
     /// let mut item = HashMap::new();
     /// item.insert("name".to_string(), Value::S("Alice".to_string()));
@@ -63,6 +63,7 @@ impl Client {
             sort_key: None,
             item: Some(crate::convert::ks_item_to_proto(&item)),
             condition_expression: None,
+            expression_values: std::collections::HashMap::new(),
         };
 
         self.inner
@@ -84,6 +85,7 @@ impl Client {
             sort_key: Some(sk.to_vec()),
             item: Some(crate::convert::ks_item_to_proto(&item)),
             condition_expression: None,
+            expression_values: std::collections::HashMap::new(),
         };
 
         self.inner
@@ -155,6 +157,7 @@ impl Client {
             partition_key: pk.to_vec(),
             sort_key: None,
             condition_expression: None,
+            expression_values: std::collections::HashMap::new(),
         };
 
         self.inner
@@ -174,6 +177,7 @@ impl Client {
             partition_key: pk.to_vec(),
             sort_key: Some(sk.to_vec()),
             condition_expression: None,
+            expression_values: std::collections::HashMap::new(),
         };
 
         self.inner
@@ -281,6 +285,113 @@ impl Client {
     /// ```
     pub async fn batch_write(&mut self, request: crate::batch::RemoteBatchWriteRequest) -> Result<crate::batch::RemoteBatchWriteResponse> {
         request.execute(&mut self.inner).await
+    }
+
+    /// Execute a transactional get operation
+    ///
+    /// # Arguments
+    /// * `request` - TransactGet request with keys to retrieve
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::{Client, RemoteTransactGetRequest};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = Client::connect("http://localhost:50051").await?;
+    ///
+    /// let request = RemoteTransactGetRequest::new()
+    ///     .get(b"user#1")
+    ///     .get(b"user#2");
+    ///
+    /// let response = client.transact_get(request).await?;
+    /// println!("Retrieved {} items", response.items.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn transact_get(&mut self, request: crate::transaction::RemoteTransactGetRequest) -> Result<crate::transaction::RemoteTransactGetResponse> {
+        request.execute(&mut self.inner).await
+    }
+
+    /// Execute a transactional write operation
+    ///
+    /// # Arguments
+    /// * `request` - TransactWrite request with operations
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::{Client, RemoteTransactWriteRequest};
+    /// # use std::collections::HashMap;
+    /// # use kstone_core::Value;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = Client::connect("http://localhost:50051").await?;
+    ///
+    /// let mut item = HashMap::new();
+    /// item.insert("name".to_string(), Value::S("Alice".to_string()));
+    ///
+    /// let request = RemoteTransactWriteRequest::new()
+    ///     .put(b"user#1", item);
+    ///
+    /// client.transact_write(request).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn transact_write(&mut self, request: crate::transaction::RemoteTransactWriteRequest) -> Result<()> {
+        request.execute(&mut self.inner).await
+    }
+
+    /// Update an item using update expression
+    ///
+    /// # Arguments
+    /// * `request` - Update request with expression
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::{Client, RemoteUpdate};
+    /// # use kstone_core::Value;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = Client::connect("http://localhost:50051").await?;
+    ///
+    /// let update = RemoteUpdate::new(b"user#1")
+    ///     .expression("SET age = age + :inc")
+    ///     .value(":inc", Value::N("1".to_string()));
+    ///
+    /// let response = client.update(update).await?;
+    /// println!("Updated item: {:?}", response.item);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn update(&mut self, request: crate::update::RemoteUpdate) -> Result<crate::update::RemoteUpdateResponse> {
+        request.execute(&mut self.inner).await
+    }
+
+    /// Execute a PartiQL statement
+    ///
+    /// # Arguments
+    /// * `statement` - PartiQL SQL statement
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::Client;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut client = Client::connect("http://localhost:50051").await?;
+    ///
+    /// let response = client.execute_statement(
+    ///     "SELECT * FROM users WHERE pk = 'user#123'"
+    /// ).await?;
+    ///
+    /// println!("Query result: {:?}", response);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_statement(&mut self, statement: impl Into<String>) -> Result<crate::partiql::RemoteExecuteStatementResponse> {
+        let statement = statement.into();
+        let request = kstone_proto::ExecuteStatementRequest { statement };
+
+        let response = self.inner
+            .execute_statement(request)
+            .await?
+            .into_inner();
+
+        crate::partiql::parse_execute_statement_response(response)
     }
 
     /// Get a reference to the underlying gRPC client
