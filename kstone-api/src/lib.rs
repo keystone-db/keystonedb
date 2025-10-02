@@ -25,6 +25,9 @@ pub use batch::{BatchGetRequest, BatchGetResponse, BatchWriteRequest, BatchWrite
 pub mod transaction;
 pub use transaction::{TransactGetRequest, TransactGetResponse, TransactWriteRequest, TransactWriteResponse, TransactWriteOp};
 
+pub mod partiql;
+pub use partiql::{ExecuteStatementRequest, ExecuteStatementResponse};
+
 /// KeystoneDB Database handle
 pub struct Database {
     engine: LsmEngine,

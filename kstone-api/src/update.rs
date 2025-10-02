@@ -34,6 +34,16 @@ impl Update {
         }
     }
 
+    /// Create update from an existing Key (used internally by PartiQL)
+    pub(crate) fn new_from_key(key: Key) -> Self {
+        Self {
+            key,
+            expression: String::new(),
+            condition: None,
+            context: ExpressionContext::new(),
+        }
+    }
+
     /// Set the update expression
     pub fn expression(mut self, expr: impl Into<String>) -> Self {
         self.expression = expr.into();

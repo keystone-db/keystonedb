@@ -41,6 +41,7 @@ zstd = "0.13"
 
 # CLI
 clap = { version = "4.4", features = ["derive"] }
+comfy-table = "7.1"
 
 # PartiQL / SQL parsing
 sqlparser = "0.52"

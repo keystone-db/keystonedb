@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use kstone_api::{Database, KeystoneValue};
+use kstone_api::{Database, KeystoneValue, ExecuteStatementResponse};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+mod table;
 
 #[derive(Parser)]
 #[command(name = "kstone")]
@@ -41,6 +43,13 @@ enum Commands {
         path: PathBuf,
         /// Partition key
         key: String,
+    },
+    /// Execute a PartiQL query
+    Query {
+        /// Database file path
+        path: PathBuf,
+        /// PartiQL SQL statement
+        sql: String,
     },
 }
 
@@ -88,6 +97,49 @@ fn main() -> Result<()> {
             db.delete(key.as_bytes())
                 .context("Failed to delete item")?;
             println!("Item deleted");
+        }
+
+        Commands::Query { path, sql } => {
+            let db = Database::open(&path).context("Failed to open database")?;
+
+            match db.execute_statement(&sql).context("Failed to execute statement")? {
+                ExecuteStatementResponse::Select {
+                    items,
+                    count,
+                    scanned_count,
+                    last_key,
+                } => {
+                    // Format and print results as a table
+                    let table = table::format_items_table(&items);
+                    println!("{}", table);
+                    println!();
+                    println!("Count: {}, Scanned: {}", count, scanned_count);
+
+                    if last_key.is_some() {
+                        println!("(More results available - pagination not yet supported in CLI)");
+                    }
+                }
+                ExecuteStatementResponse::Insert { success } => {
+                    if success {
+                        println!("✓ Item inserted successfully");
+                    } else {
+                        println!("✗ Insert failed");
+                    }
+                }
+                ExecuteStatementResponse::Update { item } => {
+                    println!("✓ Item updated successfully");
+                    println!();
+                    let json = item_to_json(&item);
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+                ExecuteStatementResponse::Delete { success } => {
+                    if success {
+                        println!("✓ Item deleted successfully");
+                    } else {
+                        println!("✗ Delete failed");
+                    }
+                }
+            }
         }
     }
 

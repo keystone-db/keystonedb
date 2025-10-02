@@ -57,6 +57,8 @@ impl Default for Scan {
 pub struct ScanResponse {
     /// Items found
     pub items: Vec<Item>,
+    /// Number of items returned
+    pub count: usize,
     /// Last evaluated key (for pagination)
     pub last_key: Option<(Bytes, Option<Bytes>)>,
     /// Number of items examined
@@ -66,8 +68,10 @@ pub struct ScanResponse {
 impl ScanResponse {
     pub(crate) fn from_result(result: ScanResult) -> Self {
         let last_key = result.last_key.map(|k| (k.pk, k.sk));
+        let count = result.items.len();
         Self {
             items: result.items,
+            count,
             last_key,
             scanned_count: result.scanned_count,
         }
