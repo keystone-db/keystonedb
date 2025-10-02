@@ -21,6 +21,7 @@ use crate::{
     extent::Extent,
     types::checksum,
     sst_block::SstBlockHandle,
+    index::TableSchema,
 };
 
 /// Manifest sequence number
@@ -55,6 +56,11 @@ pub enum ManifestRecord {
         stripe: u8,
         sst_id: u64,
     },
+
+    /// Update table schema (Phase 3.1+)
+    UpdateSchema {
+        schema: TableSchema,
+    },
 }
 
 /// SST metadata
@@ -79,6 +85,8 @@ pub struct ManifestState {
     pub checkpoint_seq: SeqNo,
     /// Stripe assignments
     pub stripe_assignments: BTreeMap<u8, Vec<u64>>, // stripe -> sst_ids
+    /// Table schema with index definitions (Phase 3.1+)
+    pub schema: TableSchema,
 }
 
 impl Default for ManifestState {
@@ -88,6 +96,7 @@ impl Default for ManifestState {
             checkpoint_lsn: 0,
             checkpoint_seq: 0,
             stripe_assignments: BTreeMap::new(),
+            schema: TableSchema::new(),
         }
     }
 }
@@ -234,6 +243,17 @@ impl Manifest {
         inner.state.ssts.get(&sst_id).cloned()
     }
 
+    /// Update table schema (Phase 3.1+)
+    pub fn update_schema(&self, schema: TableSchema) -> Result<ManifestSeq> {
+        self.append(ManifestRecord::UpdateSchema { schema })
+    }
+
+    /// Get current table schema (Phase 3.1+)
+    pub fn get_schema(&self) -> TableSchema {
+        let inner = self.inner.lock();
+        inner.state.schema.clone()
+    }
+
     /// Compact manifest by rewriting only active records
     pub fn compact(&self) -> Result<()> {
         let mut inner = self.inner.lock();
@@ -266,6 +286,17 @@ impl Manifest {
             },
         ));
         inner.next_seq += 1;
+
+        // Add schema record (Phase 3.1+)
+        if !inner.state.schema.local_indexes.is_empty() || !inner.state.schema.global_indexes.is_empty() {
+            records.push((
+                inner.next_seq,
+                ManifestRecord::UpdateSchema {
+                    schema: inner.state.schema.clone(),
+                },
+            ));
+            inner.next_seq += 1;
+        }
 
         // Write compacted records
         inner.pending = records;
@@ -327,6 +358,10 @@ impl Manifest {
                     .entry(stripe)
                     .or_insert_with(Vec::new)
                     .push(sst_id);
+            }
+
+            ManifestRecord::UpdateSchema { schema } => {
+                state.schema = schema;
             }
         }
     }
