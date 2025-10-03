@@ -4,6 +4,7 @@ use kstone_api::{Database, KeystoneValue, ExecuteStatementResponse};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+mod shell;
 mod table;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -68,6 +69,11 @@ enum Commands {
         /// Output format (table, json, jsonl, csv)
         #[arg(short, long, value_enum, default_value = "table")]
         output: OutputFormat,
+    },
+    /// Start interactive shell
+    Shell {
+        /// Database file path
+        path: PathBuf,
     },
 }
 
@@ -187,6 +193,11 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+
+        Commands::Shell { path } => {
+            let mut shell = shell::Shell::new(&path)?;
+            shell.run()?;
         }
     }
 
@@ -436,5 +447,119 @@ mod base64 {
         pub struct Engine {
             pub encode: fn(&[u8]) -> String,
         }
+    }
+}
+
+/// Format query response as table
+pub fn format_response_table(response: &ExecuteStatementResponse) -> Result<()> {
+    use colored::Colorize;
+
+    match response {
+        ExecuteStatementResponse::Select { items, .. } => {
+            if items.is_empty() {
+                println!("{}", "No items found".yellow());
+            } else {
+                let table = table::format_items_table(items);
+                println!("{}", table);
+            }
+        }
+        ExecuteStatementResponse::Insert { .. } => {
+            println!("{}", "✓ Item inserted successfully".green());
+        }
+        ExecuteStatementResponse::Update { item, .. } => {
+            println!("{}", "✓ Item updated successfully".green());
+            let json = item_to_json(item);
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+        ExecuteStatementResponse::Delete { .. } => {
+            println!("{}", "✓ Item deleted successfully".green());
+        }
+    }
+    Ok(())
+}
+
+/// Format query response as JSON
+pub fn format_response_json(response: &ExecuteStatementResponse) -> Result<()> {
+    use colored::Colorize;
+
+    match response {
+        ExecuteStatementResponse::Select { items, .. } => {
+            if items.is_empty() {
+                println!("{}", r#"{"items": [], "count": 0}"#.dimmed());
+            } else {
+                let json_items: Vec<_> = items.iter()
+                    .map(item_to_json)
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json_items)?);
+            }
+        }
+        ExecuteStatementResponse::Insert { .. } => {
+            println!("{}", r#"{"success": true, "operation": "INSERT"}"#.green());
+        }
+        ExecuteStatementResponse::Update { item, .. } => {
+            let json = item_to_json(item);
+            let result = serde_json::json!({
+                "success": true,
+                "operation": "UPDATE",
+                "item": json
+            });
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        ExecuteStatementResponse::Delete { .. } => {
+            println!("{}", r#"{"success": true, "operation": "DELETE"}"#.green());
+        }
+    }
+    Ok(())
+}
+
+/// Format query response in compact mode
+pub fn format_response_compact(response: &ExecuteStatementResponse) -> Result<()> {
+    use colored::Colorize;
+
+    match response {
+        ExecuteStatementResponse::Select { items, .. } => {
+            for (idx, item) in items.iter().enumerate() {
+                // Row header with index
+                print!("{} ", format!("[{}]", idx + 1).dimmed());
+
+                // Print key-value pairs inline
+                let pairs: Vec<String> = item.iter()
+                    .map(|(k, v)| format!("{}={}", k.cyan(), value_to_compact_string(v)))
+                    .collect();
+
+                println!("{}", pairs.join(", "));
+            }
+        }
+        ExecuteStatementResponse::Insert { .. } => {
+            println!("{}", "✓ INSERT completed".green());
+        }
+        ExecuteStatementResponse::Update { item, .. } => {
+            println!("{}", "✓ UPDATE completed".green());
+            // Show updated item inline
+            let pairs: Vec<String> = item.iter()
+                .map(|(k, v)| format!("{}={}", k.cyan(), value_to_compact_string(v)))
+                .collect();
+            println!("  {}", pairs.join(", "));
+        }
+        ExecuteStatementResponse::Delete { .. } => {
+            println!("{}", "✓ DELETE completed".green());
+        }
+    }
+    Ok(())
+}
+
+/// Convert a value to a compact string representation
+fn value_to_compact_string(value: &KeystoneValue) -> String {
+    use KeystoneValue::*;
+    match value {
+        S(s) => format!("\"{}\"", s),
+        N(n) => n.to_string(),
+        B(b) => format!("<{} bytes>", b.len()),
+        Bool(b) => b.to_string(),
+        Null => "null".to_string(),
+        Ts(ts) => format!("@{}", ts),
+        L(list) => format!("[{} items]", list.len()),
+        M(map) => format!("{{{} fields}}", map.len()),
+        VecF32(vec) => format!("<vector[{}]>", vec.len()),
     }
 }
