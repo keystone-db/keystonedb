@@ -79,6 +79,19 @@ lazy_static! {
         &["error_type"]
     )
     .unwrap();
+
+    /// Total number of rate-limited requests
+    ///
+    /// Labels:
+    /// - limit_type: per_connection or global
+    pub static ref RATE_LIMITED_REQUESTS: IntCounterVec = register_int_counter_vec!(
+        opts!(
+            "kstone_rate_limited_requests_total",
+            "Total number of rate-limited requests"
+        ),
+        &["limit_type"]
+    )
+    .unwrap();
 }
 
 /// Register all metrics with the global registry
@@ -102,6 +115,10 @@ pub fn register_metrics() {
     REGISTRY
         .register(Box::new(ERRORS_TOTAL.clone()))
         .expect("Failed to register ERRORS_TOTAL");
+
+    REGISTRY
+        .register(Box::new(RATE_LIMITED_REQUESTS.clone()))
+        .expect("Failed to register RATE_LIMITED_REQUESTS");
 }
 
 /// Encode metrics in Prometheus text format

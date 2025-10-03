@@ -5,7 +5,7 @@
 use axum::{routing::get, Router};
 use clap::Parser;
 use kstone_api::Database;
-use kstone_server::{ConnectionManager, KeystoneDbServer, KeystoneService, metrics};
+use kstone_server::{ConnectionManager, KeystoneDbServer, KeystoneService, RateLimiter, metrics};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::signal;
@@ -40,6 +40,14 @@ struct Args {
     /// Graceful shutdown timeout in seconds
     #[arg(long, default_value = "30")]
     shutdown_timeout: u64,
+
+    /// Max requests per second per connection (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    max_rps_per_connection: u32,
+
+    /// Max total requests per second (0 = unlimited)
+    #[arg(long, default_value = "0")]
+    max_rps_global: u32,
 }
 
 async fn metrics_handler() -> String {
@@ -124,6 +132,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if args.max_connections == 0 { "unlimited".to_string() } else { args.max_connections.to_string() },
         args.connection_timeout
     );
+
+    // Create rate limiter
+    let _rate_limiter = RateLimiter::new(args.max_rps_per_connection, args.max_rps_global);
+    if _rate_limiter.is_enabled() {
+        info!(
+            "Rate limiting enabled: per_connection={} rps, global={} rps",
+            if args.max_rps_per_connection == 0 { "unlimited".to_string() } else { args.max_rps_per_connection.to_string() },
+            if args.max_rps_global == 0 { "unlimited".to_string() } else { args.max_rps_global.to_string() }
+        );
+    } else {
+        info!("Rate limiting disabled");
+    }
 
     // Open or create database
     info!("Opening database at {:?}", args.db_path);

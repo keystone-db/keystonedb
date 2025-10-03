@@ -63,3 +63,6 @@ tempfile = "3.8"
 prometheus = "0.13"
 lazy_static = "1.4"
 axum = "0.7"
+
+# Rate Limiting
+governor = "0.6"
