@@ -8,8 +8,9 @@ use kstone_api::Database;
 use kstone_server::{ConnectionManager, KeystoneDbServer, KeystoneService, metrics};
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::signal;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -35,6 +36,10 @@ struct Args {
     /// Connection timeout in seconds
     #[arg(long, default_value = "60")]
     connection_timeout: u64,
+
+    /// Graceful shutdown timeout in seconds
+    #[arg(long, default_value = "30")]
+    shutdown_timeout: u64,
 }
 
 async fn metrics_handler() -> String {
@@ -50,6 +55,37 @@ async fn health_handler() -> &'static str {
 
 async fn ready_handler() -> &'static str {
     "OK"
+}
+
+/// Wait for shutdown signal (SIGTERM, SIGINT, or Ctrl+C)
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("Received Ctrl+C signal");
+        }
+        _ = terminate => {
+            info!("Received SIGTERM signal");
+        }
+    }
+
+    warn!("Shutting down gracefully...");
 }
 
 #[tokio::main]
@@ -128,13 +164,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tcp_nodelay(true)
         .add_service(KeystoneDbServer::new(service));
 
-    // Start gRPC server (blocks until shutdown)
+    // Start gRPC server with graceful shutdown
     info!(
-        "Server configured: timeout={}s, tcp_keepalive=30s, tcp_nodelay=true",
-        args.connection_timeout
+        "Server configured: timeout={}s, tcp_keepalive=30s, tcp_nodelay=true, shutdown_timeout={}s",
+        args.connection_timeout, args.shutdown_timeout
     );
 
-    server.serve(grpc_addr).await?;
+    info!("Server ready - listening for connections");
 
+    // Serve with graceful shutdown on signal
+    server
+        .serve_with_shutdown(grpc_addr, shutdown_signal())
+        .await?;
+
+    info!("gRPC server shutdown complete");
+
+    // Give shutdown timeout for connection draining
+    info!("Waiting up to {}s for connections to drain...", args.shutdown_timeout);
+    tokio::time::sleep(Duration::from_secs(args.shutdown_timeout)).await;
+
+    info!("Shutdown complete");
     Ok(())
 }
