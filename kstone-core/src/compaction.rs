@@ -2,14 +2,232 @@
 ///
 /// Compaction merges multiple SST files into one, keeping only the latest version
 /// of each key. This reduces read amplification and reclaims disk space.
+///
+/// # Compaction Strategy
+///
+/// Uses a simple level-based compaction approach:
+/// - Triggers when a stripe has too many SST files (default: ≥10 SSTs)
+/// - Merges all SSTs in a stripe into a single new SST
+/// - Removes tombstones (deleted records) during merge
+/// - Keeps newest version of each key (highest SeqNo)
 
 use crate::{Error, Result, Record, sst::{SstWriter, SstReader}};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::fs;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-/// Threshold for triggering compaction (number of SST files per stripe)
-pub const COMPACTION_THRESHOLD: usize = 10;
+/// Default compaction trigger: compact when stripe has this many SSTs
+pub const DEFAULT_SST_THRESHOLD: usize = 10;
+
+/// Minimum SSTs required to trigger compaction (must have at least 2 to merge)
+pub const MIN_SSTS_TO_COMPACT: usize = 2;
+
+/// Legacy constant for backward compatibility
+pub const COMPACTION_THRESHOLD: usize = DEFAULT_SST_THRESHOLD;
+
+/// Compaction configuration
+#[derive(Clone, Debug)]
+pub struct CompactionConfig {
+    /// Enable/disable automatic background compaction
+    pub enabled: bool,
+
+    /// Trigger compaction when stripe has this many SSTs
+    pub sst_threshold: usize,
+
+    /// How often to check for compaction opportunities (in seconds)
+    pub check_interval_secs: u64,
+
+    /// Maximum number of stripes to compact concurrently
+    pub max_concurrent_compactions: usize,
+}
+
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sst_threshold: DEFAULT_SST_THRESHOLD,
+            check_interval_secs: 60, // Check every minute
+            max_concurrent_compactions: 4, // Compact up to 4 stripes at once
+        }
+    }
+}
+
+impl CompactionConfig {
+    /// Create a new compaction config with all defaults
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Disable automatic compaction
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Default::default()
+        }
+    }
+
+    /// Set SST threshold for triggering compaction
+    pub fn with_sst_threshold(mut self, threshold: usize) -> Self {
+        self.sst_threshold = threshold.max(MIN_SSTS_TO_COMPACT);
+        self
+    }
+
+    /// Set check interval in seconds
+    pub fn with_check_interval(mut self, seconds: u64) -> Self {
+        self.check_interval_secs = seconds;
+        self
+    }
+
+    /// Set maximum concurrent compactions
+    pub fn with_max_concurrent(mut self, max: usize) -> Self {
+        self.max_concurrent_compactions = max.max(1);
+        self
+    }
+}
+
+/// Statistics about compaction operations
+#[derive(Clone, Debug, Default)]
+pub struct CompactionStats {
+    /// Total number of compactions performed
+    pub total_compactions: u64,
+
+    /// Total number of SSTs merged
+    pub total_ssts_merged: u64,
+
+    /// Total number of SSTs created
+    pub total_ssts_created: u64,
+
+    /// Total bytes read during compaction
+    pub total_bytes_read: u64,
+
+    /// Total bytes written during compaction
+    pub total_bytes_written: u64,
+
+    /// Total bytes reclaimed (deleted records)
+    pub total_bytes_reclaimed: u64,
+
+    /// Total number of records deduplicated
+    pub total_records_deduplicated: u64,
+
+    /// Total number of tombstones removed
+    pub total_tombstones_removed: u64,
+
+    /// Number of currently active compactions
+    pub active_compactions: u64,
+}
+
+/// Thread-safe compaction statistics using atomics
+#[derive(Clone)]
+pub struct CompactionStatsAtomic {
+    total_compactions: Arc<AtomicU64>,
+    total_ssts_merged: Arc<AtomicU64>,
+    total_ssts_created: Arc<AtomicU64>,
+    total_bytes_read: Arc<AtomicU64>,
+    total_bytes_written: Arc<AtomicU64>,
+    total_bytes_reclaimed: Arc<AtomicU64>,
+    total_records_deduplicated: Arc<AtomicU64>,
+    total_tombstones_removed: Arc<AtomicU64>,
+    active_compactions: Arc<AtomicU64>,
+}
+
+impl Default for CompactionStatsAtomic {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CompactionStatsAtomic {
+    /// Create new atomic statistics
+    pub fn new() -> Self {
+        Self {
+            total_compactions: Arc::new(AtomicU64::new(0)),
+            total_ssts_merged: Arc::new(AtomicU64::new(0)),
+            total_ssts_created: Arc::new(AtomicU64::new(0)),
+            total_bytes_read: Arc::new(AtomicU64::new(0)),
+            total_bytes_written: Arc::new(AtomicU64::new(0)),
+            total_bytes_reclaimed: Arc::new(AtomicU64::new(0)),
+            total_records_deduplicated: Arc::new(AtomicU64::new(0)),
+            total_tombstones_removed: Arc::new(AtomicU64::new(0)),
+            active_compactions: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Get a snapshot of current statistics
+    pub fn snapshot(&self) -> CompactionStats {
+        CompactionStats {
+            total_compactions: self.total_compactions.load(Ordering::Relaxed),
+            total_ssts_merged: self.total_ssts_merged.load(Ordering::Relaxed),
+            total_ssts_created: self.total_ssts_created.load(Ordering::Relaxed),
+            total_bytes_read: self.total_bytes_read.load(Ordering::Relaxed),
+            total_bytes_written: self.total_bytes_written.load(Ordering::Relaxed),
+            total_bytes_reclaimed: self.total_bytes_reclaimed.load(Ordering::Relaxed),
+            total_records_deduplicated: self.total_records_deduplicated.load(Ordering::Relaxed),
+            total_tombstones_removed: self.total_tombstones_removed.load(Ordering::Relaxed),
+            active_compactions: self.active_compactions.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Increment compaction counter and return guard that decrements active count on drop
+    pub fn start_compaction(&self) -> CompactionGuard {
+        self.total_compactions.fetch_add(1, Ordering::Relaxed);
+        self.active_compactions.fetch_add(1, Ordering::Relaxed);
+        CompactionGuard {
+            stats: self.clone(),
+        }
+    }
+
+    /// Record SSTs merged
+    pub fn record_ssts_merged(&self, count: u64) {
+        self.total_ssts_merged.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Record SSTs created
+    pub fn record_ssts_created(&self, count: u64) {
+        self.total_ssts_created.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Record bytes read
+    pub fn record_bytes_read(&self, bytes: u64) {
+        self.total_bytes_read.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Record bytes written
+    pub fn record_bytes_written(&self, bytes: u64) {
+        self.total_bytes_written.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Record bytes reclaimed
+    pub fn record_bytes_reclaimed(&self, bytes: u64) {
+        self.total_bytes_reclaimed.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Record records deduplicated
+    pub fn record_records_deduplicated(&self, count: u64) {
+        self.total_records_deduplicated
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Record tombstones removed
+    pub fn record_tombstones_removed(&self, count: u64) {
+        self.total_tombstones_removed
+            .fetch_add(count, Ordering::Relaxed);
+    }
+}
+
+/// RAII guard that decrements active compaction count on drop
+pub struct CompactionGuard {
+    stats: CompactionStatsAtomic,
+}
+
+impl Drop for CompactionGuard {
+    fn drop(&mut self) {
+        self.stats
+            .active_compactions
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// Compaction manager for a stripe
 pub struct CompactionManager {
@@ -276,5 +494,80 @@ mod tests {
         assert_eq!(records[1].key.pk.as_ref(), b"key2");
         assert_eq!(records[2].key.pk.as_ref(), b"key3");
         assert_eq!(records[3].key.pk.as_ref(), b"key4");
+    }
+
+    #[test]
+    fn test_compaction_config_defaults() {
+        let config = CompactionConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.sst_threshold, DEFAULT_SST_THRESHOLD);
+        assert_eq!(config.check_interval_secs, 60);
+        assert_eq!(config.max_concurrent_compactions, 4);
+    }
+
+    #[test]
+    fn test_compaction_config_disabled() {
+        let config = CompactionConfig::disabled();
+        assert!(!config.enabled);
+    }
+
+    #[test]
+    fn test_compaction_config_builder() {
+        let config = CompactionConfig::new()
+            .with_sst_threshold(5)
+            .with_check_interval(30)
+            .with_max_concurrent(2);
+
+        assert_eq!(config.sst_threshold, 5);
+        assert_eq!(config.check_interval_secs, 30);
+        assert_eq!(config.max_concurrent_compactions, 2);
+    }
+
+    #[test]
+    fn test_compaction_stats_atomic_snapshot() {
+        let stats = CompactionStatsAtomic::new();
+
+        stats.record_ssts_merged(5);
+        stats.record_ssts_created(1);
+        stats.record_bytes_read(1024);
+        stats.record_bytes_written(512);
+        stats.record_tombstones_removed(3);
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.total_ssts_merged, 5);
+        assert_eq!(snapshot.total_ssts_created, 1);
+        assert_eq!(snapshot.total_bytes_read, 1024);
+        assert_eq!(snapshot.total_bytes_written, 512);
+        assert_eq!(snapshot.total_tombstones_removed, 3);
+    }
+
+    #[test]
+    fn test_compaction_guard_decrements_on_drop() {
+        let stats = CompactionStatsAtomic::new();
+
+        {
+            let _guard = stats.start_compaction();
+            assert_eq!(stats.active_compactions.load(Ordering::Relaxed), 1);
+            assert_eq!(stats.total_compactions.load(Ordering::Relaxed), 1);
+        }
+
+        // Guard dropped, active should decrement
+        assert_eq!(stats.active_compactions.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.total_compactions.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn test_multiple_compaction_guards() {
+        let stats = CompactionStatsAtomic::new();
+
+        let _guard1 = stats.start_compaction();
+        let _guard2 = stats.start_compaction();
+        let _guard3 = stats.start_compaction();
+
+        assert_eq!(stats.active_compactions.load(Ordering::Relaxed), 3);
+        assert_eq!(stats.total_compactions.load(Ordering::Relaxed), 3);
+
+        drop(_guard2);
+        assert_eq!(stats.active_compactions.load(Ordering::Relaxed), 2);
     }
 }

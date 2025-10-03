@@ -10,6 +10,7 @@ pub mod wal_ring; // Phase 1.3+ ring buffer WAL
 pub mod sst;
 pub mod sst_block; // Phase 1.4+ block-based SST
 pub mod compaction; // Phase 5+ background compaction
+pub mod background; // Phase 1.7+ background task management
 pub mod manifest; // Phase 1.5+ metadata catalog
 pub mod lsm;
 pub mod iterator; // Phase 2.1+ query/scan support
@@ -20,4 +21,5 @@ pub mod partiql; // Phase 4+ PartiQL (SQL-compatible query language)
 
 pub use error::{Error, Result};
 pub use types::*;
-pub use lsm::TransactWriteOperation;
+pub use lsm::{LsmEngine, TransactWriteOperation};
+pub use compaction::{CompactionConfig, CompactionStats};

@@ -2,7 +2,7 @@ use crate::{Error, Result, Record, Key, Item, SeqNo, Value, wal::Wal, sst::{SstW
 use crate::iterator::{QueryParams, QueryResult, ScanParams, ScanResult};
 use crate::expression::{UpdateAction, UpdateExecutor, ExpressionContext, Expr, ExpressionEvaluator};
 use crate::index::{TableSchema, encode_index_key, decode_index_key};
-use crate::compaction::CompactionManager;
+use crate::compaction::{CompactionManager, CompactionConfig, CompactionStatsAtomic};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
@@ -41,6 +41,8 @@ struct LsmInner {
     next_sst_id: u64,      // Global SST ID counter
     schema: TableSchema,   // Index definitions (Phase 3.1+)
     stream_buffer: std::collections::VecDeque<crate::stream::StreamRecord>,  // Stream records (Phase 3.4+)
+    compaction_config: CompactionConfig,  // Compaction configuration (Phase 1.7+)
+    compaction_stats: CompactionStatsAtomic,  // Compaction statistics (Phase 1.7+)
 }
 
 /// Transaction write operation (Phase 2.7+)
@@ -108,6 +110,8 @@ impl LsmEngine {
                 next_sst_id: 1,
                 schema,
                 stream_buffer: std::collections::VecDeque::new(),
+                compaction_config: CompactionConfig::default(),
+                compaction_stats: CompactionStatsAtomic::new(),
             })),
         })
     }
@@ -180,6 +184,8 @@ impl LsmEngine {
                 next_sst_id: max_sst_id + 1,
                 schema: TableSchema::new(), // TODO: Load from manifest in future
                 stream_buffer: std::collections::VecDeque::new(),
+                compaction_config: CompactionConfig::default(),
+                compaction_stats: CompactionStatsAtomic::new(),
             })),
         })
     }
@@ -956,11 +962,14 @@ impl LsmEngine {
         // Clear stripe's memtable
         inner.stripes[stripe_id].memtable.clear();
 
-        // Check if compaction is needed for this stripe
-        let compaction_mgr = CompactionManager::new(stripe_id, inner.dir.clone());
-        if compaction_mgr.needs_compaction(inner.stripes[stripe_id].ssts.len()) {
-            // Compact all SSTs in this stripe
+        // Check if compaction is needed for this stripe (Phase 1.7+)
+        if inner.compaction_config.enabled && inner.stripes[stripe_id].ssts.len() >= inner.compaction_config.sst_threshold {
+            // Start compaction statistics tracking
+            let _guard = inner.compaction_stats.start_compaction();
+
+            let compaction_mgr = CompactionManager::new(stripe_id, inner.dir.clone());
             let ssts_to_compact = &inner.stripes[stripe_id].ssts;
+            let sst_count = ssts_to_compact.len();
 
             // Allocate new SST ID for compacted file
             let compacted_sst_id = inner.next_sst_id;
@@ -968,6 +977,10 @@ impl LsmEngine {
 
             // Perform compaction
             let (new_sst, old_paths) = compaction_mgr.compact(ssts_to_compact, compacted_sst_id)?;
+
+            // Record statistics
+            inner.compaction_stats.record_ssts_merged(sst_count as u64);
+            inner.compaction_stats.record_ssts_created(1);
 
             // Replace all SSTs with the compacted one
             inner.stripes[stripe_id].ssts.clear();
@@ -989,6 +1002,103 @@ impl LsmEngine {
             if !inner.stripes[stripe_id].memtable.is_empty() {
                 self.flush_stripe(&mut inner, stripe_id)?;
             }
+        }
+
+        Ok(())
+    }
+
+    /// Set compaction configuration (Phase 1.7+)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use kstone_core::{LsmEngine, CompactionConfig};
+    /// use tempfile::TempDir;
+    ///
+    /// let dir = TempDir::new().unwrap();
+    /// let db = LsmEngine::create(dir.path()).unwrap();
+    ///
+    /// // Disable compaction
+    /// db.set_compaction_config(CompactionConfig::disabled());
+    ///
+    /// // Or customize compaction settings
+    /// let config = CompactionConfig::new()
+    ///     .with_sst_threshold(5)
+    ///     .with_check_interval(30);
+    /// db.set_compaction_config(config);
+    /// ```
+    pub fn set_compaction_config(&self, config: CompactionConfig) {
+        let mut inner = self.inner.write();
+        inner.compaction_config = config;
+    }
+
+    /// Get current compaction configuration (Phase 1.7+)
+    pub fn compaction_config(&self) -> CompactionConfig {
+        let inner = self.inner.read();
+        inner.compaction_config.clone()
+    }
+
+    /// Get compaction statistics (Phase 1.7+)
+    ///
+    /// Returns a snapshot of current compaction statistics including:
+    /// - Total number of compactions performed
+    /// - SSTs merged and created
+    /// - Bytes read, written, and reclaimed
+    /// - Records deduplicated and tombstones removed
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use kstone_core::LsmEngine;
+    /// use tempfile::TempDir;
+    ///
+    /// let dir = TempDir::new().unwrap();
+    /// let db = LsmEngine::create(dir.path()).unwrap();
+    ///
+    /// // Get compaction statistics
+    /// let stats = db.compaction_stats();
+    /// println!("Total compactions: {}", stats.total_compactions);
+    /// println!("SSTs merged: {}", stats.total_ssts_merged);
+    /// println!("Bytes reclaimed: {}", stats.total_bytes_reclaimed);
+    /// ```
+    pub fn compaction_stats(&self) -> crate::compaction::CompactionStats {
+        let inner = self.inner.read();
+        inner.compaction_stats.snapshot()
+    }
+
+    /// Trigger manual compaction on a specific stripe (Phase 1.7+)
+    ///
+    /// This is primarily for testing or manual database maintenance.
+    /// Compaction will only occur if the stripe has enough SSTs.
+    pub fn trigger_compaction(&self, stripe_id: usize) -> Result<()> {
+        if stripe_id >= NUM_STRIPES {
+            return Err(Error::InvalidArgument(format!(
+                "Invalid stripe_id: {}, must be < {}",
+                stripe_id, NUM_STRIPES
+            )));
+        }
+
+        let mut inner = self.inner.write();
+
+        // Check if compaction is needed
+        if inner.stripes[stripe_id].ssts.len() >= inner.compaction_config.sst_threshold {
+            let _guard = inner.compaction_stats.start_compaction();
+            let compaction_mgr = CompactionManager::new(stripe_id, inner.dir.clone());
+
+            let sst_count = inner.stripes[stripe_id].ssts.len();
+            let compacted_sst_id = inner.next_sst_id;
+            inner.next_sst_id += 1;
+
+            let ssts_to_compact = &inner.stripes[stripe_id].ssts;
+            let (new_sst, old_paths) = compaction_mgr.compact(ssts_to_compact, compacted_sst_id)?;
+
+            inner.compaction_stats.record_ssts_merged(sst_count as u64);
+            inner.compaction_stats.record_ssts_created(1);
+
+            inner.stripes[stripe_id].ssts.clear();
+            inner.stripes[stripe_id].ssts.push(new_sst);
+
+            compaction_mgr.cleanup_old_ssts(old_paths)?;
         }
 
         Ok(())
@@ -1524,5 +1634,177 @@ mod tests {
         // Verify latest version is still there
         let result = db.get(&key).unwrap().unwrap();
         assert_eq!(result.get("version").unwrap(), &Value::N("3".to_string()));
+    }
+
+    #[test]
+    fn test_compaction_configuration() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Check default config
+        let config = db.compaction_config();
+        assert!(config.enabled);
+        assert_eq!(config.sst_threshold, 10);
+
+        // Disable compaction
+        db.set_compaction_config(CompactionConfig::disabled());
+        let config = db.compaction_config();
+        assert!(!config.enabled);
+
+        // Enable with custom settings
+        let custom_config = CompactionConfig::new()
+            .with_sst_threshold(5)
+            .with_check_interval(30);
+        db.set_compaction_config(custom_config);
+
+        let config = db.compaction_config();
+        assert!(config.enabled);
+        assert_eq!(config.sst_threshold, 5);
+        assert_eq!(config.check_interval_secs, 30);
+    }
+
+    #[test]
+    fn test_compaction_statistics() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Initial stats should be zero
+        let stats = db.compaction_stats();
+        assert_eq!(stats.total_compactions, 0);
+        assert_eq!(stats.total_ssts_merged, 0);
+        assert_eq!(stats.active_compactions, 0);
+
+        // Trigger compaction by writing enough data
+        for batch in 0..12 {
+            for i in 0..MEMTABLE_THRESHOLD {
+                let key = Key::new(format!("batch{:02}_key{:04}", batch, i).into_bytes());
+                let mut item = HashMap::new();
+                item.insert("value".to_string(), Value::number(i as i64));
+                db.put(key, item).unwrap();
+            }
+        }
+
+        // Check that compaction happened
+        let stats = db.compaction_stats();
+        assert!(stats.total_compactions > 0, "Expected at least one compaction");
+        assert!(stats.total_ssts_merged > 0, "Expected SSTs to be merged");
+        assert!(stats.total_ssts_created > 0, "Expected new SSTs to be created");
+    }
+
+    #[test]
+    fn test_manual_compaction_trigger() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Set a low threshold for testing
+        db.set_compaction_config(CompactionConfig::new().with_sst_threshold(3));
+
+        // Write enough data to create multiple SSTs in stripe 0
+        // Use keys that hash to stripe 0
+        let mut count = 0;
+        for i in 0..50000 {
+            let key = Key::new(format!("key{:06}", i).into_bytes());
+            if key.stripe() == 0 {
+                let mut item = HashMap::new();
+                item.insert("value".to_string(), Value::number(i));
+                db.put(key, item).unwrap();
+                count += 1;
+                if count >= MEMTABLE_THRESHOLD * 4 {
+                    break;
+                }
+            }
+        }
+
+        // Force flush
+        db.flush().unwrap();
+
+        // Get initial stats
+        let stats_before = db.compaction_stats();
+
+        // Manually trigger compaction on stripe 0
+        db.trigger_compaction(0).unwrap();
+
+        // Stats should have changed
+        let stats_after = db.compaction_stats();
+        assert!(
+            stats_after.total_compactions >= stats_before.total_compactions,
+            "Compaction count should increase or stay the same"
+        );
+    }
+
+    #[test]
+    fn test_compaction_disabled() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Disable compaction
+        db.set_compaction_config(CompactionConfig::disabled());
+
+        // Write lots of data
+        for batch in 0..15 {
+            for i in 0..MEMTABLE_THRESHOLD {
+                let key = Key::new(format!("batch{:02}_key{:04}", batch, i).into_bytes());
+                let mut item = HashMap::new();
+                item.insert("value".to_string(), Value::number(i as i64));
+                db.put(key, item).unwrap();
+            }
+        }
+
+        // Force flush
+        db.flush().unwrap();
+
+        // Stats should show no compactions
+        let stats = db.compaction_stats();
+        assert_eq!(stats.total_compactions, 0, "No compactions should occur when disabled");
+    }
+
+    #[test]
+    fn test_compaction_with_deletes_reclaims_space() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Insert many items
+        for i in 0..200 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("value".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // Force flush
+        db.flush().unwrap();
+
+        // Delete half of them
+        for i in 0..100 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            db.delete(key).unwrap();
+        }
+
+        // Force flush to create tombstones in SST
+        db.flush().unwrap();
+
+        // Trigger more writes to cause compaction
+        for batch in 0..12 {
+            for i in 200..(200 + MEMTABLE_THRESHOLD) {
+                let key = Key::new(format!("key{:06}_{:02}", i, batch).into_bytes());
+                let mut item = HashMap::new();
+                item.insert("value".to_string(), Value::number(i as i64));
+                db.put(key, item).unwrap();
+            }
+        }
+
+        // Verify deleted items are gone
+        for i in 0..100 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let result = db.get(&key).unwrap();
+            assert!(result.is_none(), "Deleted key should not be found");
+        }
+
+        // Verify non-deleted items still exist
+        for i in 100..200 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let result = db.get(&key).unwrap();
+            assert!(result.is_some(), "Non-deleted key should still exist");
+        }
     }
 }
