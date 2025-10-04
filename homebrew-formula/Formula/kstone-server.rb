@@ -15,21 +15,22 @@ class KstoneServer < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/keystone-db/keystonedb/releases/download/v#{version}/kstone-server-aarch64-apple-darwin.tar.gz"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256_FOR_AARCH64_DARWIN"
+      sha256 "a265512f08dc38b9a1d6686e660e55af0b3edf91d427393b21472f34e17e1747"
     else
       url "https://github.com/keystone-db/keystonedb/releases/download/v#{version}/kstone-server-x86_64-apple-darwin.tar.gz"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256_FOR_X86_64_DARWIN"
+      sha256 "5f400b8ad114b86be01c6b7667960b17157f6dd475766f472e72f9e85cabf03c"
     end
   end
 
   on_linux do
-    if Hardware::CPU.arm?
-      url "https://github.com/keystone-db/keystonedb/releases/download/v#{version}/kstone-server-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256_FOR_AARCH64_LINUX"
-    else
+    # ARM64 Linux build not available in v0.1.0
+    # if Hardware::CPU.arm?
+    #   url "https://github.com/keystone-db/keystonedb/releases/download/v#{version}/kstone-server-aarch64-unknown-linux-gnu.tar.gz"
+    #   sha256 "REPLACE_WITH_ACTUAL_SHA256_FOR_AARCH64_LINUX"
+    # else
       url "https://github.com/keystone-db/keystonedb/releases/download/v#{version}/kstone-server-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256_FOR_X86_64_LINUX"
-    end
+      sha256 "e7f82b8859beb872b5bb6c18a12c8ad18acae84b69bdef750655312d63139c92"
+    # end
   end
 
   def install
