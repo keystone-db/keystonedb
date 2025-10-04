@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # KeystoneDB gRPC Server
   kstone-server:
-    image: keystonedb/kstone-server:latest
+    image: parkerdgabel/kstone-server:latest
     build:
       context: .
       dockerfile: Dockerfile.server

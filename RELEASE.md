@@ -123,21 +123,21 @@ brew untap keystone-db/keystonedb
 If Docker Hub credentials are configured in GitHub secrets:
 
 - [ ] Verify images are pushed to Docker Hub
-- [ ] Test CLI image: `docker run keystonedb/kstone:0.1.0 --version`
-- [ ] Test server image: `docker run keystonedb/kstone-server:0.1.0 --version`
+- [ ] Test CLI image: `docker run parkerdgabel/kstone:0.1.0 --version`
+- [ ] Test server image: `docker run parkerdgabel/kstone-server:0.1.0 --version`
 
 If not automated, build and push manually:
 
 ```bash
 # Build CLI image
-docker build -t keystonedb/kstone:0.1.0 -t keystonedb/kstone:latest .
-docker push keystonedb/kstone:0.1.0
-docker push keystonedb/kstone:latest
+docker build -t parkerdgabel/kstone:0.1.0 -t parkerdgabel/kstone:latest .
+docker push parkerdgabel/kstone:0.1.0
+docker push parkerdgabel/kstone:latest
 
 # Build server image
-docker build -f Dockerfile.server -t keystonedb/kstone-server:0.1.0 -t keystonedb/kstone-server:latest .
-docker push keystonedb/kstone-server:0.1.0
-docker push keystonedb/kstone-server:latest
+docker build -f Dockerfile.server -t parkerdgabel/kstone-server:0.1.0 -t parkerdgabel/kstone-server:latest .
+docker push parkerdgabel/kstone-server:0.1.0
+docker push parkerdgabel/kstone-server:latest
 ```
 
 #### 5. Announce Release

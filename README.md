@@ -54,18 +54,18 @@ brew install kstone-server
 
 ```bash
 # Pull CLI image
-docker pull keystonedb/kstone:latest
+docker pull parkerdgabel/kstone:latest
 
 # Pull server image
-docker pull keystonedb/kstone-server:latest
+docker pull parkerdgabel/kstone-server:latest
 
 # Run CLI
-docker run -v $(pwd)/data:/data keystonedb/kstone create /data/mydb.keystone
+docker run -v $(pwd)/data:/data parkerdgabel/kstone create /data/mydb.keystone
 
 # Run server
 docker run -p 50051:50051 -p 9090:9090 \
   -v $(pwd)/data:/data \
-  keystonedb/kstone-server --db-path /data/mydb.keystone
+  parkerdgabel/kstone-server --db-path /data/mydb.keystone
 ```
 
 ### Pre-built Binaries
