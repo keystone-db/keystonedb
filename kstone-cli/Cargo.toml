@@ -10,8 +10,8 @@ name = "kstone"
 path = "src/main.rs"
 
 [dependencies]
-kstone-api = { path = "../kstone-api" }
-kstone-core = { path = "../kstone-core" }
+kstone-api = { path = "../kstone-api", version = "0.1.0" }
+kstone-core = { path = "../kstone-core", version = "0.1.0" }
 anyhow.workspace = true
 clap.workspace = true
 comfy-table.workspace = true

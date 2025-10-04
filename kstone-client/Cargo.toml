@@ -4,11 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "gRPC client library for KeystoneDB remote access"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 # Internal
-kstone-proto = { path = "../kstone-proto" }
-kstone-core = { path = "../kstone-core" }
+kstone-proto = { path = "../kstone-proto", version = "0.1.0" }
+kstone-core = { path = "../kstone-core", version = "0.1.0" }
 
 # gRPC
 tonic = { workspace = true }

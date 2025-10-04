@@ -4,9 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "High-level DynamoDB-compatible API for KeystoneDB"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-kstone-core = { path = "../kstone-core" }
+kstone-core = { path = "../kstone-core", version = "0.1.0" }
 anyhow.workspace = true
 thiserror.workspace = true
 bytes.workspace = true

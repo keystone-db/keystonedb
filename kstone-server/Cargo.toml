@@ -11,9 +11,9 @@ path = "src/bin/kstone-server.rs"
 
 [dependencies]
 # Internal
-kstone-api = { path = "../kstone-api" }
-kstone-core = { path = "../kstone-core" }
-kstone-proto = { path = "../kstone-proto" }
+kstone-api = { path = "../kstone-api", version = "0.1.0" }
+kstone-core = { path = "../kstone-core", version = "0.1.0" }
+kstone-proto = { path = "../kstone-proto", version = "0.1.0" }
 
 # gRPC
 tonic = { workspace = true }
