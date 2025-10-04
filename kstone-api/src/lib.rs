@@ -1888,16 +1888,19 @@ mod tests {
     }
 
     #[test]
-    fn test_database_in_memory_query_not_supported() {
+    fn test_database_in_memory_query_works() {
         let db = Database::create_in_memory().unwrap();
 
         db.put(b"user#1", ItemBuilder::new().string("name", "Alice").build()).unwrap();
+        db.put_with_sk(b"user#1", b"profile", ItemBuilder::new().string("name", "Bob").build()).unwrap();
 
         let query = Query::new(b"user#1");
         let result = db.query(query);
 
-        // Should fail with Internal error
-        assert!(matches!(result, Err(kstone_core::Error::Internal(_))));
+        // Query should work on in-memory database
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.items.len(), 2);
     }
 
     #[test]

@@ -1764,17 +1764,20 @@ mod tests {
         assert_eq!(stats.total_ssts_merged, 0);
         assert_eq!(stats.active_compactions, 0);
 
-        // Trigger compaction by writing enough data
+        // Use same PK prefix to ensure all keys go to same stripe
+        let pk = b"testdata";
+
+        // Write 12 batches of data - all keys use same PK to route to same stripe
         for batch in 0..12 {
             for i in 0..MEMTABLE_THRESHOLD {
-                let key = Key::new(format!("batch{:02}_key{:04}", batch, i).into_bytes());
+                let key = Key::with_sk(pk.to_vec(), format!("batch{:02}_key{:04}", batch, i).into_bytes());
                 let mut item = HashMap::new();
                 item.insert("value".to_string(), Value::number(i as i64));
                 db.put(key, item).unwrap();
             }
         }
 
-        // Check that compaction happened
+        // Check that compaction happened (12 SSTs in one stripe > 10 threshold)
         let stats = db.compaction_stats();
         assert!(stats.total_compactions > 0, "Expected at least one compaction");
         assert!(stats.total_ssts_merged > 0, "Expected SSTs to be merged");
