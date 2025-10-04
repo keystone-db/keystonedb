@@ -1,0 +1,292 @@
+---
+const sections = [
+  {
+    title: 'Getting Started',
+    chapters: [
+      { num: 1, title: 'What is KeystoneDB?', href: '/docs/chapter-01' },
+      { num: 2, title: 'Quick Start Guide', href: '/docs/chapter-02' },
+      { num: 3, title: 'Installation & Setup', href: '/docs/chapter-03' },
+    ],
+  },
+  {
+    title: 'Core Concepts',
+    chapters: [
+      { num: 4, title: 'Data Model & Types', href: '/docs/chapter-04' },
+      { num: 5, title: 'Keys and Partitioning', href: '/docs/chapter-05' },
+      { num: 6, title: 'LSM Tree Architecture', href: '/docs/chapter-06' },
+      { num: 7, title: 'Storage Engine Internals', href: '/docs/chapter-07' },
+    ],
+  },
+  {
+    title: 'Basic Operations',
+    chapters: [
+      { num: 8, title: 'CRUD Operations', href: '/docs/chapter-08' },
+      { num: 9, title: 'Querying Data', href: '/docs/chapter-09' },
+      { num: 10, title: 'Scanning Tables', href: '/docs/chapter-10' },
+      { num: 11, title: 'Batch Operations', href: '/docs/chapter-11' },
+    ],
+  },
+  {
+    title: 'Advanced Features',
+    chapters: [
+      { num: 12, title: 'Update Expressions', href: '/docs/chapter-12' },
+      { num: 13, title: 'Conditional Operations', href: '/docs/chapter-13' },
+      { num: 14, title: 'Transactions', href: '/docs/chapter-14' },
+      { num: 15, title: 'Secondary Indexes', href: '/docs/chapter-15' },
+      { num: 16, title: 'Time To Live (TTL)', href: '/docs/chapter-16' },
+      { num: 17, title: 'Streams & CDC', href: '/docs/chapter-17' },
+      { num: 18, title: 'PartiQL Query Language', href: '/docs/chapter-18' },
+    ],
+  },
+  {
+    title: 'Storage & Performance',
+    chapters: [
+      { num: 19, title: 'WAL Implementation', href: '/docs/chapter-19' },
+      { num: 20, title: 'SST File Format', href: '/docs/chapter-20' },
+      { num: 21, title: 'Bloom Filters', href: '/docs/chapter-21' },
+      { num: 22, title: 'Compaction Strategies', href: '/docs/chapter-22' },
+      { num: 23, title: 'Memory Management', href: '/docs/chapter-23' },
+      { num: 24, title: 'Caching & Optimization', href: '/docs/chapter-24' },
+    ],
+  },
+  {
+    title: 'Network & Distribution',
+    chapters: [
+      { num: 25, title: 'gRPC Server', href: '/docs/chapter-25' },
+      { num: 26, title: 'Client Libraries', href: '/docs/chapter-26' },
+      { num: 27, title: 'Authentication & Security', href: '/docs/chapter-27' },
+      { num: 28, title: 'Replication & Sync', href: '/docs/chapter-28' },
+    ],
+  },
+  {
+    title: 'Operations',
+    chapters: [
+      { num: 29, title: 'Backup & Restore', href: '/docs/chapter-29' },
+      { num: 30, title: 'Monitoring & Metrics', href: '/docs/chapter-30' },
+      { num: 31, title: 'Performance Tuning', href: '/docs/chapter-31' },
+      { num: 32, title: 'Troubleshooting', href: '/docs/chapter-32' },
+      { num: 33, title: 'CLI Tools', href: '/docs/chapter-33' },
+    ],
+  },
+  {
+    title: 'Internals',
+    chapters: [
+      { num: 34, title: 'Concurrency Model', href: '/docs/chapter-34' },
+      { num: 35, title: 'Error Handling', href: '/docs/chapter-35' },
+      { num: 36, title: 'Testing Strategy', href: '/docs/chapter-36' },
+      { num: 37, title: 'Benchmarking', href: '/docs/chapter-37' },
+    ],
+  },
+  {
+    title: 'Cloud Integration',
+    chapters: [
+      { num: 38, title: 'DynamoDB Sync', href: '/docs/chapter-38' },
+      { num: 39, title: 'Cloud Storage Backends', href: '/docs/chapter-39' },
+      { num: 40, title: 'Hybrid Architectures', href: '/docs/chapter-40' },
+      { num: 41, title: 'Migration Strategies', href: '/docs/chapter-41' },
+    ],
+  },
+  {
+    title: 'Appendices',
+    chapters: [
+      { num: 'A', title: 'Configuration Reference', href: '/docs/appendix-a' },
+      { num: 'B', title: 'Error Reference', href: '/docs/appendix-b' },
+      { num: 'C', title: 'Glossary', href: '/docs/appendix-c' },
+      { num: 'D', title: 'DynamoDB Migration', href: '/docs/appendix-d' },
+      { num: 'E', title: 'Performance Benchmarks', href: '/docs/appendix-e' },
+    ],
+  },
+];
+
+const currentPath = Astro.url.pathname;
+---
+
+<aside class="docs-sidebar">
+  <div class="sidebar-header">
+    <a href="/docs" class="text-lg font-bold text-slate-900 dark:text-white hover:text-primary-600 dark:hover:text-primary-400 transition-colors">
+      📚 Documentation
+    </a>
+  </div>
+
+  <nav class="sidebar-nav">
+    {sections.map((section) => (
+      <div class="nav-section">
+        <h3 class="section-title">{section.title}</h3>
+        <ul class="chapter-list">
+          {section.chapters.map((chapter) => (
+            <li>
+              <a
+                href={chapter.href}
+                class:list={[
+                  'chapter-link',
+                  currentPath === chapter.href && 'active'
+                ]}
+              >
+                <span class="chapter-num">{chapter.num}</span>
+                <span class="chapter-title">{chapter.title}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </div>
+    ))}
+  </nav>
+</aside>
+
+<style>
+  .docs-sidebar {
+    position: sticky;
+    top: 80px;
+    height: calc(100vh - 96px);
+    overflow-y: auto;
+    padding: 1.5rem;
+    border-right: 1px solid theme('colors.slate.200');
+  }
+
+  :global(.dark) .docs-sidebar {
+    border-right-color: theme('colors.slate.800');
+  }
+
+  .sidebar-header {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid theme('colors.slate.200');
+  }
+
+  :global(.dark) .sidebar-header {
+    border-bottom-color: theme('colors.slate.800');
+  }
+
+  .sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .nav-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: theme('colors.slate.500');
+    margin-bottom: 0.5rem;
+  }
+
+  :global(.dark) .section-title {
+    color: theme('colors.slate.400');
+  }
+
+  .chapter-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .chapter-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    text-decoration: none;
+    color: theme('colors.slate.700');
+    font-size: 0.875rem;
+    transition: all 0.2s;
+  }
+
+  :global(.dark) .chapter-link {
+    color: theme('colors.slate.300');
+  }
+
+  .chapter-link:hover {
+    background-color: theme('colors.slate.100');
+    color: theme('colors.primary.600');
+  }
+
+  :global(.dark) .chapter-link:hover {
+    background-color: theme('colors.slate.800');
+    color: theme('colors.primary.400');
+  }
+
+  .chapter-link.active {
+    background-color: theme('colors.primary.100');
+    color: theme('colors.primary.700');
+    font-weight: 500;
+  }
+
+  :global(.dark) .chapter-link.active {
+    background-color: theme('colors.primary.900 / 0.3');
+    color: theme('colors.primary.400');
+  }
+
+  .chapter-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.25rem;
+    background-color: theme('colors.slate.200');
+    color: theme('colors.slate.600');
+    font-size: 0.75rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  :global(.dark) .chapter-num {
+    background-color: theme('colors.slate.700');
+    color: theme('colors.slate.400');
+  }
+
+  .chapter-link.active .chapter-num {
+    background-color: theme('colors.primary.200');
+    color: theme('colors.primary.700');
+  }
+
+  :global(.dark) .chapter-link.active .chapter-num {
+    background-color: theme('colors.primary.800');
+    color: theme('colors.primary.300');
+  }
+
+  .chapter-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Scrollbar styling */
+  .docs-sidebar::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .docs-sidebar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .docs-sidebar::-webkit-scrollbar-thumb {
+    background: theme('colors.slate.300');
+    border-radius: 3px;
+  }
+
+  :global(.dark) .docs-sidebar::-webkit-scrollbar-thumb {
+    background: theme('colors.slate.600');
+  }
+
+  .docs-sidebar::-webkit-scrollbar-thumb:hover {
+    background: theme('colors.slate.400');
+  }
+
+  :global(.dark) .docs-sidebar::-webkit-scrollbar-thumb:hover {
+    background: theme('colors.slate.500');
+  }
+</style>

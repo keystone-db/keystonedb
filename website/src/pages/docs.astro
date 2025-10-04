@@ -1,0 +1,145 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { BookOpen, Zap, Code } from 'lucide-react';
+
+const docSections = [
+  {
+    title: 'Getting Started',
+    chapters: [
+      { num: 1, title: 'What is KeystoneDB?', href: '/docs/chapter-01' },
+      { num: 2, title: 'Quick Start Guide', href: '/docs/chapter-02' },
+      { num: 3, title: 'Installation & Setup', href: '/docs/chapter-03' },
+    ],
+  },
+  {
+    title: 'Core Concepts',
+    chapters: [
+      { num: 4, title: 'Data Model & Types', href: '/docs/chapter-04' },
+      { num: 5, title: 'Keys and Partitioning', href: '/docs/chapter-05' },
+      { num: 6, title: 'LSM Tree Architecture', href: '/docs/chapter-06' },
+      { num: 7, title: 'Storage Engine Internals', href: '/docs/chapter-07' },
+    ],
+  },
+  {
+    title: 'Basic Operations',
+    chapters: [
+      { num: 8, title: 'CRUD Operations', href: '/docs/chapter-08' },
+      { num: 9, title: 'Querying Data', href: '/docs/chapter-09' },
+      { num: 10, title: 'Scanning Tables', href: '/docs/chapter-10' },
+      { num: 11, title: 'Batch Operations', href: '/docs/chapter-11' },
+    ],
+  },
+  {
+    title: 'Advanced Features',
+    chapters: [
+      { num: 12, title: 'Update Expressions', href: '/docs/chapter-12' },
+      { num: 13, title: 'Conditional Operations', href: '/docs/chapter-13' },
+      { num: 14, title: 'Transactions', href: '/docs/chapter-14' },
+      { num: 15, title: 'Secondary Indexes', href: '/docs/chapter-15' },
+      { num: 16, title: 'Time To Live (TTL)', href: '/docs/chapter-16' },
+      { num: 17, title: 'Streams & CDC', href: '/docs/chapter-17' },
+      { num: 18, title: 'PartiQL Query Language', href: '/docs/chapter-18' },
+    ],
+  },
+];
+---
+
+<BaseLayout title="KeystoneDB Documentation" description="Complete documentation for KeystoneDB - from basics to advanced features">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          Documentation
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto mb-8">
+          Complete guide to KeystoneDB: 41 chapters covering everything from basics to internals
+        </p>
+
+        <div class="flex flex-wrap justify-center gap-4">
+          <div class="px-6 py-3 bg-primary-50 dark:bg-primary-900/30 rounded-lg">
+            <div class="text-2xl font-bold text-primary-600 dark:text-primary-400">124K+</div>
+            <div class="text-sm text-slate-600 dark:text-slate-400">Words</div>
+          </div>
+          <div class="px-6 py-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
+            <div class="text-2xl font-bold text-accent-600 dark:text-accent-400">41</div>
+            <div class="text-sm text-slate-600 dark:text-slate-400">Chapters</div>
+          </div>
+          <div class="px-6 py-3 bg-green-50 dark:bg-green-900/30 rounded-lg">
+            <div class="text-2xl font-bold text-green-600 dark:text-green-400">500+</div>
+            <div class="text-sm text-slate-600 dark:text-slate-400">Code Examples</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Links -->
+      <div class="grid md:grid-cols-3 gap-6 mb-16">
+        <a href="/docs/chapter-01" class="card hover:shadow-xl transition-all group">
+          <div class="w-12 h-12 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <BookOpen className="w-6 h-6 text-primary-600 dark:text-primary-400" />
+          </div>
+          <h3 class="text-xl font-bold mb-2">Start Here</h3>
+          <p class="text-slate-600 dark:text-slate-300">New to KeystoneDB? Begin with Chapter 1</p>
+        </a>
+
+        <a href="/docs/chapter-02" class="card hover:shadow-xl transition-all group">
+          <div class="w-12 h-12 rounded-lg bg-accent-100 dark:bg-accent-900 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <Zap className="w-6 h-6 text-accent-600 dark:text-accent-400" />
+          </div>
+          <h3 class="text-xl font-bold mb-2">Quick Start</h3>
+          <p class="text-slate-600 dark:text-slate-300">Get started in 5 minutes</p>
+        </a>
+
+        <a href="/api" class="card hover:shadow-xl transition-all group">
+          <div class="w-12 h-12 rounded-lg bg-green-100 dark:bg-green-900 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <Code className="w-6 h-6 text-green-600 dark:text-green-400" />
+          </div>
+          <h3 class="text-xl font-bold mb-2">API Reference</h3>
+          <p class="text-slate-600 dark:text-slate-300">Complete API documentation</p>
+        </a>
+      </div>
+
+      <!-- Documentation Sections -->
+      <div class="space-y-8">
+        {docSections.map((section) => (
+          <div class="card">
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-6">{section.title}</h2>
+            <div class="grid md:grid-cols-2 gap-4">
+              {section.chapters.map((chapter) => (
+                <a
+                  href={chapter.href}
+                  class="flex items-center gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group"
+                >
+                  <div class="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center flex-shrink-0 text-primary-600 dark:text-primary-400 font-bold group-hover:scale-110 transition-transform">
+                    {chapter.num}
+                  </div>
+                  <div class="flex-1">
+                    <h3 class="font-semibold text-slate-900 dark:text-white group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors">
+                      {chapter.title}
+                    </h3>
+                  </div>
+                  <svg class="w-5 h-5 text-slate-400 group-hover:text-primary-600 dark:group-hover:text-primary-400 group-hover:translate-x-1 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                  </svg>
+                </a>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <!-- More Sections Note -->
+      <div class="card mt-8 text-center bg-gradient-to-r from-primary-50 to-accent-50 dark:from-primary-900/20 dark:to-accent-900/20 border-primary-200 dark:border-primary-800">
+        <p class="text-lg text-slate-700 dark:text-slate-300">
+          📚 <strong>Plus 23 more chapters</strong> covering Storage & Performance, Network & Distribution, Operations, Internals, and Appendices
+        </p>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

@@ -1,0 +1,300 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import DocsSidebar from '../components/DocsSidebar.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description } = Astro.props;
+const fullTitle = `${title} - KeystoneDB Documentation`;
+---
+
+<BaseLayout title={fullTitle} description={description || 'KeystoneDB Documentation'}>
+  <Header />
+
+  <div class="docs-container">
+    <div class="docs-layout">
+      <!-- Sidebar -->
+      <DocsSidebar />
+
+      <!-- Main content -->
+      <main class="docs-content">
+        <article class="prose">
+          <slot />
+        </article>
+
+        <!-- Navigation footer -->
+        <div class="docs-nav-footer">
+          <div class="nav-links">
+            <slot name="prev-link" />
+            <slot name="next-link" />
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <Footer />
+</BaseLayout>
+
+<style>
+  .docs-container {
+    min-height: calc(100vh - 64px);
+    padding-top: 64px;
+  }
+
+  .docs-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    max-width: 1400px;
+    margin: 0 auto;
+    gap: 0;
+  }
+
+  @media (max-width: 1024px) {
+    .docs-layout {
+      grid-template-columns: 240px 1fr;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .docs-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .docs-layout aside {
+      display: none;
+    }
+  }
+
+  .docs-content {
+    max-width: 850px;
+    padding: 2rem 3rem;
+    overflow-x: hidden;
+  }
+
+  @media (max-width: 768px) {
+    .docs-content {
+      padding: 1.5rem;
+    }
+  }
+
+  .prose {
+    color: theme('colors.slate.700');
+  }
+
+  :global(.dark) .prose {
+    color: theme('colors.slate.300');
+  }
+
+  /* Typography styles for markdown content */
+  .prose :global(h1) {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: theme('colors.slate.900');
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid theme('colors.slate.200');
+  }
+
+  :global(.dark) .prose :global(h1) {
+    color: theme('colors.white');
+    border-bottom-color: theme('colors.slate.800');
+  }
+
+  .prose :global(h2) {
+    font-size: 1.875rem;
+    font-weight: 600;
+    color: theme('colors.slate.900');
+    margin-top: 2.5rem;
+    margin-bottom: 1rem;
+  }
+
+  :global(.dark) .prose :global(h2) {
+    color: theme('colors.white');
+  }
+
+  .prose :global(h3) {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: theme('colors.slate.900');
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+  }
+
+  :global(.dark) .prose :global(h3) {
+    color: theme('colors.white');
+  }
+
+  .prose :global(h4) {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: theme('colors.slate.800');
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  :global(.dark) .prose :global(h4) {
+    color: theme('colors.slate.200');
+  }
+
+  .prose :global(p) {
+    margin-bottom: 1rem;
+    line-height: 1.7;
+  }
+
+  .prose :global(a) {
+    color: theme('colors.primary.600');
+    text-decoration: underline;
+    text-decoration-color: theme('colors.primary.300');
+    text-underline-offset: 2px;
+    transition: all 0.2s;
+  }
+
+  :global(.dark) .prose :global(a) {
+    color: theme('colors.primary.400');
+    text-decoration-color: theme('colors.primary.700');
+  }
+
+  .prose :global(a:hover) {
+    color: theme('colors.primary.700');
+    text-decoration-color: theme('colors.primary.500');
+  }
+
+  :global(.dark) .prose :global(a:hover) {
+    color: theme('colors.primary.300');
+    text-decoration-color: theme('colors.primary.500');
+  }
+
+  .prose :global(code) {
+    background-color: theme('colors.slate.100');
+    color: theme('colors.pink.600');
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-size: 0.875em;
+    font-family: 'Fira Code', monospace;
+  }
+
+  :global(.dark) .prose :global(code) {
+    background-color: theme('colors.slate.800');
+    color: theme('colors.pink.400');
+  }
+
+  .prose :global(pre) {
+    background-color: theme('colors.slate.900');
+    color: theme('colors.slate.100');
+    padding: 1.25rem;
+    border-radius: 0.5rem;
+    overflow-x: auto;
+    margin: 1.5rem 0;
+    font-size: 0.875rem;
+    line-height: 1.7;
+  }
+
+  :global(.dark) .prose :global(pre) {
+    background-color: theme('colors.slate.950');
+  }
+
+  .prose :global(pre code) {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+  }
+
+  .prose :global(ul),
+  .prose :global(ol) {
+    margin: 1rem 0;
+    padding-left: 1.5rem;
+  }
+
+  .prose :global(li) {
+    margin: 0.5rem 0;
+    line-height: 1.7;
+  }
+
+  .prose :global(blockquote) {
+    border-left: 4px solid theme('colors.primary.500');
+    padding-left: 1rem;
+    margin: 1.5rem 0;
+    font-style: italic;
+    color: theme('colors.slate.600');
+  }
+
+  :global(.dark) .prose :global(blockquote) {
+    border-left-color: theme('colors.primary.600');
+    color: theme('colors.slate.400');
+  }
+
+  .prose :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+  }
+
+  .prose :global(th),
+  .prose :global(td) {
+    border: 1px solid theme('colors.slate.300');
+    padding: 0.75rem;
+    text-align: left;
+  }
+
+  :global(.dark) .prose :global(th),
+  :global(.dark) .prose :global(td) {
+    border-color: theme('colors.slate.700');
+  }
+
+  .prose :global(th) {
+    background-color: theme('colors.slate.100');
+    font-weight: 600;
+  }
+
+  :global(.dark) .prose :global(th) {
+    background-color: theme('colors.slate.800');
+  }
+
+  .prose :global(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+    margin: 1.5rem 0;
+  }
+
+  .prose :global(hr) {
+    border: none;
+    border-top: 1px solid theme('colors.slate.200');
+    margin: 2rem 0;
+  }
+
+  :global(.dark) .prose :global(hr) {
+    border-top-color: theme('colors.slate.800');
+  }
+
+  /* Navigation footer */
+  .docs-nav-footer {
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid theme('colors.slate.200');
+  }
+
+  :global(.dark) .docs-nav-footer {
+    border-top-color: theme('colors.slate.800');
+  }
+
+  .nav-links {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+
+  @media (max-width: 640px) {
+    .nav-links {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

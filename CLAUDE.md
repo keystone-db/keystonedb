@@ -1764,45 +1764,65 @@ kstone query mydb.keystone "UPDATE items SET age = 31 WHERE pk = 'user#999'"
 kstone query mydb.keystone "DELETE FROM items WHERE pk = 'user#999'"
 ```
 
-**Phase 5: In-Memory Database**
-Provide memory-only database mode for testing and temporary data.
+**Phase 5: In-Memory Database - COMPLETE ✅**
 
-*Phase 5.1 Storage Abstraction*
-- Create StorageBackend trait (abstract disk vs memory)
-- Separate WAL backend (disk file vs memory buffer)
-- Separate SST backend (disk file vs memory map)
-- Refactor LsmEngine to use storage abstraction
+Provides memory-only database mode for testing and temporary data. All data is stored in RAM and lost when the database is dropped.
 
-*Phase 5.2 In-Memory Implementation*
-- MemoryWal: WAL stored in Vec<Record> (no disk writes)
-- MemorySst: SST stored in Vec<Record> (no disk files)
-- All LSM operations work in-memory
-- No persistence, data lost when database closed
+*Phase 5.1 Storage Abstraction - COMPLETE ✅*
+- MemoryWal: In-memory write-ahead log (stores records in Vec)
+- MemorySst: In-memory sorted string tables (stores records in sorted Vec with bloom filters)
+- MemorySstStore: HashMap-based "file system" for managing multiple SSTs
+- BloomFilter made Clone to support in-memory SST cloning
+- Same API as disk-based components (create, open, append, flush, read_all)
+- New modules: memory_wal.rs, memory_sst.rs
 
-*Phase 5.3 Database Mode Selection*
-- `Database::create_in_memory()` API
-- `Database::create_in_memory_with_schema(schema)` API
+*Phase 5.2 In-Memory LSM Engine - COMPLETE ✅*
+- MemoryLsmEngine: Complete LSM engine implementation using memory components
+- 256-stripe architecture (same as disk engine)
+- Automatic memtable flushing at 1000 records threshold
+- Put/Get/Delete operations fully functional
+- Clear() method for resetting database state
+- len() and is_empty() methods for introspection
+- New module: memory_lsm.rs
+- New tests: 8 tests in memory_lsm module
+- All tests passing
+
+*Phase 5.3 Database Mode Selection - COMPLETE ✅*
+- `Database::create_in_memory()` API for creating in-memory databases
+- `Database::create_in_memory_with_schema(schema)` API for schema support
+- DatabaseEngine enum (Disk or Memory) for internal routing
+- Core operations (put, get, delete, flush) work with both engines
+- Advanced features (query, scan, update, transactions) require disk engine (return Internal error)
+- New tests: test_database_in_memory_create, test_database_in_memory_put_get, test_database_in_memory_delete, test_database_in_memory_with_sort_key, test_database_in_memory_query_not_supported
+- All tests passing (5 new in-memory tests)
+
+*Phase 5.4 Test Utilities - NOT IMPLEMENTED*
 - Optional: `Database::snapshot_to_disk(path)` for exporting
 - Optional: `Database::restore_from_disk(path)` for importing
-
-*Phase 5.4 Test Utilities*
-- Helper functions for creating test databases
-- Performance benchmarks comparing disk vs memory
-- Migration tools for disk → memory (load entire DB into RAM)
+- Optional: Performance benchmarks comparing disk vs memory
+- Optional: Migration tools for disk → memory (load entire DB into RAM)
 
 **In-Memory Database Example Usage:**
 ```rust
-use kstone_api::Database;
+use kstone_api::{Database, ItemBuilder};
 
-// Create in-memory database (no disk I/O)
+// Create in-memory database (no disk I/O, no path required)
 let db = Database::create_in_memory()?;
 
-// Same API as disk-based database
+// Same API as disk-based database for core operations
+let item = ItemBuilder::new()
+    .string("name", "Alice")
+    .number("age", 30)
+    .build();
+
 db.put(b"user#123", item)?;
 let result = db.get(b"user#123")?;
 
-// Optional: snapshot to disk
-db.snapshot_to_disk("backup.keystone")?;
+// Data is lost when db is dropped
+drop(db); // All data is gone
+
+// Advanced features (query, scan, update, transactions) not yet supported in memory mode
+// Use disk-based database for those features
 ```
 
 **Phase 6: Network Layer & gRPC Server - COMPLETE ✅**

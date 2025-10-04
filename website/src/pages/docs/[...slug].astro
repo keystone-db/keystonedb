@@ -1,0 +1,146 @@
+---
+import { getCollection } from 'astro:content';
+import DocsLayout from '../../layouts/DocsLayout.astro';
+
+export async function getStaticPaths() {
+  const docsEntries = await getCollection('docs');
+  return docsEntries.map(entry => ({
+    params: { slug: entry.slug },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await entry.render();
+
+// Extract title from slug (e.g., "chapter-01" -> "Chapter 1")
+let pageTitle = entry.slug;
+if (entry.slug.startsWith('chapter-')) {
+  const chapterNum = entry.slug.replace('chapter-', '').replace(/^0+/, '');
+  pageTitle = `Chapter ${chapterNum}`;
+} else if (entry.slug.startsWith('appendix-')) {
+  const appendixLetter = entry.slug.replace('appendix-', '').toUpperCase();
+  pageTitle = `Appendix ${appendixLetter}`;
+}
+
+// Get all docs for navigation
+const allDocs = await getCollection('docs');
+const sortedDocs = allDocs.sort((a, b) => {
+  // Sort chapters and appendices
+  const getOrder = (slug: string) => {
+    if (slug.startsWith('chapter-')) {
+      return parseInt(slug.replace('chapter-', ''));
+    } else if (slug.startsWith('appendix-')) {
+      // Appendices come after chapters (start at 100)
+      return 100 + slug.charCodeAt(9); // 9 is the index of the letter
+    }
+    return 999;
+  };
+  return getOrder(a.slug) - getOrder(b.slug);
+});
+
+// Find current index and adjacent chapters
+const currentIndex = sortedDocs.findIndex(doc => doc.slug === entry.slug);
+const prevDoc = currentIndex > 0 ? sortedDocs[currentIndex - 1] : null;
+const nextDoc = currentIndex < sortedDocs.length - 1 ? sortedDocs[currentIndex + 1] : null;
+
+// Format navigation titles
+const formatNavTitle = (slug: string) => {
+  if (slug.startsWith('chapter-')) {
+    const num = slug.replace('chapter-', '').replace(/^0+/, '');
+    return `Chapter ${num}`;
+  } else if (slug.startsWith('appendix-')) {
+    const letter = slug.replace('appendix-', '').toUpperCase();
+    return `Appendix ${letter}`;
+  }
+  return slug;
+};
+---
+
+<DocsLayout title={pageTitle}>
+  <Content />
+
+  <!-- Previous/Next Navigation -->
+  <div slot="prev-link">
+    {prevDoc && (
+      <a href={`/docs/${prevDoc.slug}`} class="nav-button nav-prev">
+        <div class="nav-direction">← Previous</div>
+        <div class="nav-title">{formatNavTitle(prevDoc.slug)}</div>
+      </a>
+    )}
+  </div>
+
+  <div slot="next-link">
+    {nextDoc && (
+      <a href={`/docs/${nextDoc.slug}`} class="nav-button nav-next">
+        <div class="nav-direction">Next →</div>
+        <div class="nav-title">{formatNavTitle(nextDoc.slug)}</div>
+      </a>
+    )}
+  </div>
+</DocsLayout>
+
+<style>
+  .nav-button {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem 1.5rem;
+    border: 1px solid theme('colors.slate.200');
+    border-radius: 0.5rem;
+    text-decoration: none;
+    transition: all 0.2s;
+    background-color: theme('colors.white');
+  }
+
+  :global(.dark) .nav-button {
+    background-color: theme('colors.slate.900');
+    border-color: theme('colors.slate.700');
+  }
+
+  .nav-button:hover {
+    border-color: theme('colors.primary.400');
+    background-color: theme('colors.primary.50');
+  }
+
+  :global(.dark) .nav-button:hover {
+    border-color: theme('colors.primary.600');
+    background-color: theme('colors.primary.950');
+  }
+
+  .nav-prev {
+    text-align: left;
+  }
+
+  .nav-next {
+    text-align: right;
+    margin-left: auto;
+  }
+
+  .nav-direction {
+    font-size: 0.875rem;
+    color: theme('colors.slate.500');
+    margin-bottom: 0.25rem;
+  }
+
+  :global(.dark) .nav-direction {
+    color: theme('colors.slate.400');
+  }
+
+  .nav-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: theme('colors.slate.900');
+  }
+
+  :global(.dark) .nav-title {
+    color: theme('colors.white');
+  }
+
+  .nav-button:hover .nav-title {
+    color: theme('colors.primary.700');
+  }
+
+  :global(.dark) .nav-button:hover .nav-title {
+    color: theme('colors.primary.400');
+  }
+</style>

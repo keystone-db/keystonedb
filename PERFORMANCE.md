@@ -499,7 +499,125 @@ let duration = start.elapsed();
 
 ## Benchmarking
 
-### Simple Benchmark Template
+### Benchmark Suite
+
+KeystoneDB includes a comprehensive benchmark suite using Rust's built-in benchmarking framework.
+
+#### Running Benchmarks
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Run specific benchmark
+cargo bench --bench crash_recovery
+
+# Run benchmarks with output
+cargo bench -- --nocapture
+```
+
+#### Available Benchmarks
+
+1. **Crash Recovery Benchmarks** (`benches/crash_recovery.rs`)
+   - WAL replay performance
+   - Recovery time vs data size
+   - Multi-stripe recovery
+
+2. **Core Operations** (when added)
+   - Put/Get/Delete throughput
+   - Query performance
+   - Scan performance
+   - Batch operation performance
+
+3. **Compaction** (when added)
+   - Compaction throughput
+   - Compaction latency impact
+   - Write amplification measurement
+
+#### Benchmark Output Format
+
+Benchmarks produce detailed reports in `target/criterion/` directory:
+
+```
+crash_recovery/
+├── base/
+│   └── estimates.json      # Performance estimates
+├── change/
+│   └── estimates.json      # Comparison to previous run
+└── report/
+    └── index.html          # Visual report
+```
+
+**Example Output:**
+```
+crash_recovery_100_records
+                        time:   [1.2345 ms 1.2567 ms 1.2789 ms]
+                        change: [-2.3% +0.5% +3.2%] (p = 0.52 > 0.05)
+                        No change in performance detected.
+
+crash_recovery_1000_records
+                        time:   [12.345 ms 12.567 ms 12.789 ms]
+                        thrpt:  [78.2 ops/s 79.5 ops/s 81.0 ops/s]
+```
+
+#### Interpreting Results
+
+**Time:**
+- First value: Lower bound (fastest observed)
+- Second value: Estimate (median)
+- Third value: Upper bound (slowest observed)
+
+**Change:**
+- Percentage change from previous benchmark run
+- p-value indicates statistical significance
+- p < 0.05 means change is statistically significant
+
+**Throughput:**
+- Operations per second
+- Higher is better
+- Calculated as `1 / time_per_operation`
+
+### Custom Benchmarks
+
+Create custom benchmarks using the template:
+
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use kstone_api::{Database, ItemBuilder};
+use tempfile::TempDir;
+
+fn benchmark_writes(c: &mut Criterion) {
+    c.bench_function("write_1000_items", |b| {
+        b.iter_batched(
+            || {
+                let dir = TempDir::new().unwrap();
+                Database::create(dir.path()).unwrap()
+            },
+            |db| {
+                for i in 0..1000 {
+                    let key = format!("key{:010}", i);
+                    let item = ItemBuilder::new()
+                        .string("value", format!("data{}", i))
+                        .build();
+                    db.put(key.as_bytes(), item).unwrap();
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+criterion_group!(benches, benchmark_writes);
+criterion_main!(benches);
+```
+
+**Save as:** `benches/my_benchmark.rs`
+
+**Run with:** `cargo bench --bench my_benchmark`
+
+### Simple Performance Testing
+
+For quick performance checks without the full benchmark suite:
 
 ```rust
 use std::time::Instant;
@@ -571,6 +689,35 @@ Batch Write (100)  5k batches/sec    20ms           100ms
 - Memory size (affects page cache hit rate)
 - CPU speed (affects compression, hashing)
 - Workload (hot vs cold data)
+
+### Performance Optimization Using Configuration
+
+KeystoneDB provides `DatabaseConfig` for tuning performance (Phase 8+):
+
+```rust
+use kstone_api::Database;
+use kstone_core::DatabaseConfig;
+
+// Create config with custom settings
+let config = DatabaseConfig {
+    memtable_threshold: 5000,        // Larger memtable = fewer flushes
+    compaction_threshold: 8,         // Less aggressive compaction
+    max_concurrent_compactions: 2,   // Lower resource usage
+    ..Default::default()
+};
+
+// Create database with config
+let db = Database::create_with_config("mydb.keystone", config)?;
+```
+
+**Tuning Guidelines:**
+
+| Workload | memtable_threshold | compaction_threshold | max_concurrent_compactions |
+|----------|-------------------|---------------------|---------------------------|
+| Write-heavy | 5000-10000 | 8-10 | 2-4 |
+| Read-heavy | 1000-2000 | 2-4 | 4-8 |
+| Balanced | 1000-3000 | 4-6 | 4 |
+| Memory-constrained | 500-1000 | 2-4 | 1-2 |
 
 ## Summary
 

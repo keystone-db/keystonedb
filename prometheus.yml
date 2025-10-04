@@ -1,0 +1,22 @@
+# Prometheus configuration for KeystoneDB monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'keystonedb'
+    environment: 'development'
+
+scrape_configs:
+  # KeystoneDB Server metrics
+  - job_name: 'keystonedb-server'
+    static_configs:
+      - targets: ['kstone-server:9090']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

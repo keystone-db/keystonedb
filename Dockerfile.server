@@ -1,0 +1,79 @@
+# KeystoneDB Server Dockerfile
+# Multi-stage build for minimal final image with gRPC server
+
+# Builder stage
+FROM rust:1.75-slim as builder
+
+# Install build dependencies (including protobuf compiler for gRPC)
+RUN apt-get update && \
+    apt-get install -y pkg-config libssl-dev protobuf-compiler && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy workspace configuration
+COPY Cargo.toml Cargo.lock ./
+
+# Copy all crate sources
+COPY kstone-core ./kstone-core
+COPY kstone-api ./kstone-api
+COPY kstone-proto ./kstone-proto
+COPY kstone-server ./kstone-server
+
+# Build in release mode
+RUN cargo build --release --bin kstone-server
+
+# Strip binary to reduce size
+RUN strip /build/target/release/kstone-server
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash kstone
+
+# Create data directory
+RUN mkdir -p /data && chown kstone:kstone /data
+
+# Copy binary from builder
+COPY --from=builder /build/target/release/kstone-server /usr/local/bin/kstone-server
+
+# Set user
+USER kstone
+
+# Set working directory
+WORKDIR /data
+
+# Expose ports
+EXPOSE 50051/tcp
+EXPOSE 9090/tcp
+
+# Environment variables with defaults
+ENV DB_PATH=/data/db.keystone
+ENV GRPC_PORT=50051
+ENV METRICS_PORT=9090
+ENV HOST=0.0.0.0
+ENV MAX_CONNECTIONS=1000
+ENV RUST_LOG=info
+
+# Default command
+ENTRYPOINT ["kstone-server"]
+CMD ["--db-path", "/data/db.keystone", "--host", "0.0.0.0", "--port", "50051"]
+
+# Health check via server process check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD pgrep kstone-server || exit 1
+
+# Labels
+LABEL org.opencontainers.image.title="KeystoneDB Server"
+LABEL org.opencontainers.image.description="KeystoneDB gRPC server for remote database access"
+LABEL org.opencontainers.image.url="https://github.com/keystone-db/keystonedb"
+LABEL org.opencontainers.image.source="https://github.com/keystone-db/keystonedb"
+LABEL org.opencontainers.image.vendor="KeystoneDB Contributors"
+LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
+LABEL org.opencontainers.image.documentation="https://github.com/keystone-db/keystonedb/blob/main/DEPLOYMENT.md"

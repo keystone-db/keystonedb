@@ -51,6 +51,7 @@ fn map_error(err: KsError) -> Status {
         KsError::CompressionError(msg) => Status::internal(format!("Compression error: {}", msg)),
         KsError::CompactionError(msg) => Status::internal(format!("Compaction error: {}", msg)),
         KsError::StripeError(msg) => Status::internal(format!("Stripe error: {}", msg)),
+        KsError::ResourceExhausted(msg) => Status::resource_exhausted(format!("Resource exhausted: {}", msg)),
     }
 }
 

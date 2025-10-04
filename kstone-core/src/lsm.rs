@@ -3,6 +3,7 @@ use crate::iterator::{QueryParams, QueryResult, ScanParams, ScanResult};
 use crate::expression::{UpdateAction, UpdateExecutor, ExpressionContext, Expr, ExpressionEvaluator};
 use crate::index::{TableSchema, encode_index_key, decode_index_key};
 use crate::compaction::{CompactionManager, CompactionConfig, CompactionStatsAtomic};
+use crate::config::DatabaseConfig;
 use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
@@ -21,6 +22,7 @@ pub struct LsmEngine {
 /// A single stripe in the LSM tree
 struct Stripe {
     memtable: BTreeMap<Vec<u8>, Record>, // Sorted by encoded key
+    memtable_size_bytes: usize,          // Approximate size in bytes
     ssts: Vec<SstReader>,                 // Newest first
 }
 
@@ -28,8 +30,44 @@ impl Stripe {
     fn new() -> Self {
         Self {
             memtable: BTreeMap::new(),
+            memtable_size_bytes: 0,
             ssts: Vec::new(),
         }
+    }
+
+    /// Estimate the size of a record in bytes
+    fn estimate_record_size(key_enc: &[u8], record: &Record) -> usize {
+        let mut size = key_enc.len(); // Key size
+        size += std::mem::size_of::<SeqNo>(); // Sequence number
+
+        // Estimate item size
+        if let Some(item) = &record.value {
+            for (attr_name, value) in item {
+                size += attr_name.len();
+                size += match value {
+                    Value::S(s) => s.len(),
+                    Value::N(n) => n.len(),
+                    Value::B(b) => b.len(),
+                    Value::Bool(_) => 1,
+                    Value::Null => 0,
+                    Value::Ts(_) => 8,
+                    Value::L(list) => {
+                        // Rough estimate for lists
+                        list.len() * 32 // Assume average 32 bytes per item
+                    }
+                    Value::M(map) => {
+                        // Rough estimate for maps
+                        map.len() * 64 // Assume average 64 bytes per entry
+                    }
+                    Value::VecF32(vec) => {
+                        // f32 vectors: 4 bytes per element
+                        vec.len() * 4
+                    }
+                };
+            }
+        }
+
+        size
     }
 }
 
@@ -43,6 +81,7 @@ struct LsmInner {
     stream_buffer: std::collections::VecDeque<crate::stream::StreamRecord>,  // Stream records (Phase 3.4+)
     compaction_config: CompactionConfig,  // Compaction configuration (Phase 1.7+)
     compaction_stats: CompactionStatsAtomic,  // Compaction statistics (Phase 1.7+)
+    config: DatabaseConfig,  // Database configuration (Phase 8+)
 }
 
 /// Transaction write operation (Phase 2.7+)
@@ -80,6 +119,42 @@ impl TransactWriteOperation {
     }
 }
 
+impl LsmInner {
+    /// Check if a stripe needs to flush based on configured limits
+    fn should_flush_stripe(&self, stripe_id: usize) -> bool {
+        let stripe = &self.stripes[stripe_id];
+
+        // Check record count limit
+        if stripe.memtable.len() >= self.config.max_memtable_records {
+            return true;
+        }
+
+        // Check byte size limit if configured
+        if let Some(max_bytes) = self.config.max_memtable_size_bytes {
+            if stripe.memtable_size_bytes >= max_bytes {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Insert a record into a stripe's memtable, tracking size
+    fn insert_into_memtable(&mut self, stripe_id: usize, key_enc: Vec<u8>, record: Record) {
+        let record_size = Stripe::estimate_record_size(&key_enc, &record);
+
+        // If key already exists, subtract old size first
+        if let Some(old_record) = self.stripes[stripe_id].memtable.get(&key_enc) {
+            let old_size = Stripe::estimate_record_size(&key_enc, old_record);
+            self.stripes[stripe_id].memtable_size_bytes =
+                self.stripes[stripe_id].memtable_size_bytes.saturating_sub(old_size);
+        }
+
+        self.stripes[stripe_id].memtable.insert(key_enc, record);
+        self.stripes[stripe_id].memtable_size_bytes += record_size;
+    }
+}
+
 impl LsmEngine {
     /// Create a new database
     pub fn create(dir: impl AsRef<Path>) -> Result<Self> {
@@ -88,6 +163,18 @@ impl LsmEngine {
 
     /// Create a new database with a table schema (Phase 3.1+)
     pub fn create_with_schema(dir: impl AsRef<Path>, schema: TableSchema) -> Result<Self> {
+        Self::create_with_config(dir, DatabaseConfig::default(), schema)
+    }
+
+    /// Create a new database with custom configuration (Phase 8+)
+    pub fn create_with_config(
+        dir: impl AsRef<Path>,
+        config: DatabaseConfig,
+        schema: TableSchema,
+    ) -> Result<Self> {
+        // Validate configuration
+        config.validate().map_err(|e| Error::InvalidArgument(e))?;
+
         let dir = dir.as_ref();
         fs::create_dir_all(dir)?;
 
@@ -112,6 +199,7 @@ impl LsmEngine {
                 stream_buffer: std::collections::VecDeque::new(),
                 compaction_config: CompactionConfig::default(),
                 compaction_stats: CompactionStatsAtomic::new(),
+                config,
             })),
         })
     }
@@ -186,6 +274,7 @@ impl LsmEngine {
                 stream_buffer: std::collections::VecDeque::new(),
                 compaction_config: CompactionConfig::default(),
                 compaction_stats: CompactionStatsAtomic::new(),
+                config: DatabaseConfig::default(), // TODO: Load from manifest in future
             })),
         })
     }
@@ -215,7 +304,7 @@ impl LsmEngine {
         // Route to correct stripe
         let stripe_id = record.key.stripe() as usize;
         let key_enc = record.key.encode().to_vec();
-        inner.stripes[stripe_id].memtable.insert(key_enc, record);
+        inner.insert_into_memtable(stripe_id, key_enc, record);
 
         // Materialize LSI entries (Phase 3.1+)
         if !inner.schema.local_indexes.is_empty() {
@@ -249,7 +338,7 @@ impl LsmEngine {
         }
 
         // Check if this stripe needs to flush
-        if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
+        if inner.should_flush_stripe(stripe_id) {
             self.flush_stripe(&mut inner, stripe_id)?;
         }
 
@@ -356,7 +445,7 @@ impl LsmEngine {
         }
 
         // Check if this stripe needs to flush
-        if inner.stripes[stripe_id].memtable.len() >= MEMTABLE_THRESHOLD {
+        if inner.should_flush_stripe(stripe_id) {
             self.flush_stripe(&mut inner, stripe_id)?;
         }
 
@@ -961,6 +1050,7 @@ impl LsmEngine {
 
         // Clear stripe's memtable
         inner.stripes[stripe_id].memtable.clear();
+        inner.stripes[stripe_id].memtable_size_bytes = 0;
 
         // Check if compaction is needed for this stripe (Phase 1.7+)
         if inner.compaction_config.enabled && inner.stripes[stripe_id].ssts.len() >= inner.compaction_config.sst_threshold {

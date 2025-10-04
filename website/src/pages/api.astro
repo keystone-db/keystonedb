@@ -1,0 +1,193 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { Code } from 'lucide-react';
+
+const apiMethods = [
+  {
+    category: 'Database Management',
+    methods: [
+      { name: 'Database::create()', desc: 'Create a new database', link: '/docs/chapter-08' },
+      { name: 'Database::open()', desc: 'Open an existing database', link: '/docs/chapter-08' },
+      { name: 'Database::create_with_schema()', desc: 'Create database with schema', link: '/docs/chapter-15' },
+      { name: 'Database::create_in_memory()', desc: 'Create in-memory database', link: '/docs/chapter-29' },
+    ],
+  },
+  {
+    category: 'CRUD Operations',
+    methods: [
+      { name: 'put()', desc: 'Insert or update an item', link: '/docs/chapter-08' },
+      { name: 'get()', desc: 'Retrieve an item by key', link: '/docs/chapter-08' },
+      { name: 'delete()', desc: 'Remove an item', link: '/docs/chapter-08' },
+      { name: 'update()', desc: 'Update item with expression', link: '/docs/chapter-12' },
+    ],
+  },
+  {
+    category: 'Query & Scan',
+    methods: [
+      { name: 'query()', desc: 'Query items by partition key', link: '/docs/chapter-09' },
+      { name: 'scan()', desc: 'Scan all items in table', link: '/docs/chapter-10' },
+      { name: 'Query::new()', desc: 'Build a query request', link: '/docs/chapter-09' },
+      { name: 'Scan::new()', desc: 'Build a scan request', link: '/docs/chapter-10' },
+    ],
+  },
+  {
+    category: 'Batch Operations',
+    methods: [
+      { name: 'batch_get()', desc: 'Get multiple items (up to 25)', link: '/docs/chapter-11' },
+      { name: 'batch_write()', desc: 'Put/delete multiple items (up to 25)', link: '/docs/chapter-11' },
+    ],
+  },
+  {
+    category: 'Transactions',
+    methods: [
+      { name: 'transact_get()', desc: 'Atomic read of multiple items', link: '/docs/chapter-14' },
+      { name: 'transact_write()', desc: 'Atomic write of multiple items', link: '/docs/chapter-14' },
+    ],
+  },
+  {
+    category: 'Streams',
+    methods: [
+      { name: 'read_stream()', desc: 'Read change data capture records', link: '/docs/chapter-17' },
+    ],
+  },
+  {
+    category: 'Monitoring',
+    methods: [
+      { name: 'stats()', desc: 'Get database statistics', link: '/docs/chapter-31' },
+      { name: 'health()', desc: 'Get database health status', link: '/docs/chapter-31' },
+    ],
+  },
+];
+
+const builderTypes = [
+  { name: 'ItemBuilder', desc: 'Build items with typed values', link: '/docs/chapter-04' },
+  { name: 'Query', desc: 'Build query requests', link: '/docs/chapter-09' },
+  { name: 'Scan', desc: 'Build scan requests', link: '/docs/chapter-10' },
+  { name: 'Update', desc: 'Build update requests', link: '/docs/chapter-12' },
+  { name: 'BatchGetRequest', desc: 'Build batch get requests', link: '/docs/chapter-11' },
+  { name: 'BatchWriteRequest', desc: 'Build batch write requests', link: '/docs/chapter-11' },
+  { name: 'TransactGetRequest', desc: 'Build transaction get requests', link: '/docs/chapter-14' },
+  { name: 'TransactWriteRequest', desc: 'Build transaction write requests', link: '/docs/chapter-14' },
+];
+---
+
+<BaseLayout title="API Reference - KeystoneDB" description="Complete API reference for KeystoneDB Rust library">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          API Reference
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+          Complete reference for the KeystoneDB Rust API
+        </p>
+      </div>
+
+      <!-- Quick Example -->
+      <div class="card max-w-4xl mx-auto mb-16 p-0 overflow-hidden">
+        <div class="bg-slate-900 dark:bg-slate-950 p-6">
+          <div class="flex items-center gap-2 mb-4">
+            <Code className="w-5 h-5 text-primary-400" />
+            <span class="text-slate-300 text-sm font-mono">Quick Start Example</span>
+          </div>
+          <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="language-rust">use kstone_api::&#123;Database, ItemBuilder, Query&#125;;
+
+// Create database
+let db = Database::create("mydb.keystone")?;
+
+// Put an item
+let item = ItemBuilder::new()
+    .string("name", "Alice")
+    .number("age", 30)
+    .build();
+db.put(b"user#123", item)?;
+
+// Get an item
+let result = db.get(b"user#123")?;
+
+// Query
+let query = Query::new(b"user#123");
+let response = db.query(query)?;
+
+// Update with expression
+db.update(b"user#123", "SET age = age + 1")?;</code></pre>
+        </div>
+      </div>
+
+      <!-- Database Methods -->
+      <div class="space-y-8 mb-16">
+        {apiMethods.map((section) => (
+          <div class="card">
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-6">{section.category}</h2>
+            <div class="space-y-4">
+              {section.methods.map((method) => (
+                <a
+                  href={method.link}
+                  class="flex items-start gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group"
+                >
+                  <code class="px-3 py-1 bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 rounded font-mono text-sm flex-shrink-0">
+                    {method.name}
+                  </code>
+                  <div class="flex-1">
+                    <p class="text-slate-600 dark:text-slate-300">{method.desc}</p>
+                  </div>
+                  <svg class="w-5 h-5 text-slate-400 group-hover:text-primary-600 dark:group-hover:text-primary-400 group-hover:translate-x-1 transition-all flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                  </svg>
+                </a>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <!-- Builder Types -->
+      <div class="card mb-16">
+        <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-6">Builder Types</h2>
+        <div class="grid md:grid-cols-2 gap-4">
+          {builderTypes.map((builder) => (
+            <a
+              href={builder.link}
+              class="flex items-center gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group"
+            >
+              <div class="w-10 h-10 rounded-lg bg-accent-100 dark:bg-accent-900 flex items-center justify-center flex-shrink-0">
+                <Code className="w-5 h-5 text-accent-600 dark:text-accent-400" />
+              </div>
+              <div class="flex-1">
+                <h3 class="font-semibold text-slate-900 dark:text-white font-mono text-sm group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
+                  {builder.name}
+                </h3>
+                <p class="text-sm text-slate-600 dark:text-slate-400">{builder.desc}</p>
+              </div>
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-accent-600 dark:group-hover:text-accent-400 group-hover:translate-x-1 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+              </svg>
+            </a>
+          ))}
+        </div>
+      </div>
+
+      <!-- Full Documentation -->
+      <div class="text-center">
+        <div class="card max-w-2xl mx-auto">
+          <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">
+            Need More Details?
+          </h2>
+          <p class="text-slate-600 dark:text-slate-300 mb-6">
+            For complete API documentation with examples, type signatures, and best practices, see Chapter 36 of the documentation.
+          </p>
+          <a href="/docs/chapter-36" class="btn btn-primary">
+            View Complete API Reference
+          </a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

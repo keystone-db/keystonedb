@@ -37,15 +37,74 @@ Fast, persistent, ACID-compliant storage with a familiar DynamoDB API, PartiQL s
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+# Add KeystoneDB tap
+brew tap keystone-db/keystonedb
+
+# Install CLI
+brew install kstone
+
+# Install server (optional)
+brew install kstone-server
+```
+
+### Docker
+
+```bash
+# Pull CLI image
+docker pull keystonedb/kstone:latest
+
+# Pull server image
+docker pull keystonedb/kstone-server:latest
+
+# Run CLI
+docker run -v $(pwd)/data:/data keystonedb/kstone create /data/mydb.keystone
+
+# Run server
+docker run -p 50051:50051 -p 9090:9090 \
+  -v $(pwd)/data:/data \
+  keystonedb/kstone-server --db-path /data/mydb.keystone
+```
+
+### Pre-built Binaries
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/keystone-db/keystonedb/releases):
+
+- **Linux** (x86_64, ARM64)
+- **macOS** (Intel, Apple Silicon)
+- **Windows** (x86_64)
+
+Extract and add to your PATH:
+
+```bash
+# Linux/macOS
+tar xzf kstone-*.tar.gz
+sudo mv kstone /usr/local/bin/
+sudo chmod +x /usr/local/bin/kstone
+
+# Verify installation
+kstone --version
+```
+
+### Build from Source
+
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/keystonedb.git
+git clone https://github.com/keystone-db/keystonedb.git
 cd keystonedb
 
 # Build release binary
 cargo build --release
 
-# CLI will be at target/release/kstone
+# Binaries will be at:
+# - target/release/kstone (CLI)
+# - target/release/kstone-server (server)
+
+# Optional: Install to system
+sudo cp target/release/kstone /usr/local/bin/
+sudo cp target/release/kstone-server /usr/local/bin/
 ```
 
 ## Quick Start
@@ -119,6 +178,16 @@ use kstone_api::{Database, ItemBuilder, Query, ScanBuilder};
 let db = Database::create("mydb.keystone")?;
 let db = Database::open("mydb.keystone")?;
 
+// Create with custom configuration (Phase 8+)
+use kstone_core::DatabaseConfig;
+let config = DatabaseConfig {
+    memtable_threshold: 5000,        // Records per stripe before flush
+    compaction_threshold: 4,         // SSTs before compaction
+    max_concurrent_compactions: 4,   // Parallel compaction limit
+    ..Default::default()
+};
+let db = Database::create_with_config("mydb.keystone", config)?;
+
 // Put an item
 let item = ItemBuilder::new()
     .string("name", "Alice")
@@ -191,6 +260,18 @@ db.update(
 // Update expressions
 db.update(b"user#123", "SET age = age + 1, visits = visits + 1", None)?;
 db.update(b"user#123", "REMOVE temp_field", None)?;
+
+// Database statistics and health (Phase 8+)
+let stats = db.stats()?;
+println!("Total compactions: {}", stats.compaction.total_compactions);
+println!("Bytes reclaimed: {}", stats.compaction.total_bytes_reclaimed);
+
+let health = db.health();
+match health.status {
+    HealthStatus::Healthy => println!("Database is healthy"),
+    HealthStatus::Degraded => println!("Warnings: {:?}", health.warnings),
+    HealthStatus::Unhealthy => println!("Errors: {:?}", health.errors),
+}
 ```
 
 ## Architecture
@@ -220,7 +301,7 @@ KeystoneDB is organized as a Cargo workspace with 4 crates:
 
 ## Project Status
 
-**Phase 5 Complete** - Production-ready storage engine with comprehensive feature set
+**Phase 8 Complete** - Production-ready with observability and configuration
 
 - ✅ **Phase 0**: Walking Skeleton (Put/Get/Delete, WAL, SST, LSM)
 - ✅ **Phase 1**: Full storage engine (256 stripes, flush, recovery)
@@ -228,8 +309,11 @@ KeystoneDB is organized as a Cargo workspace with 4 crates:
 - ✅ **Phase 3**: Indexes and features (LSI, GSI, TTL, Streams)
 - ✅ **Phase 4**: PartiQL support (Parser, Translator, ExecuteStatement API)
 - ✅ **Phase 5**: Optimization and enhancements (Background compaction, LIMIT/OFFSET, projection, scan filtering, CLI improvements)
+- ✅ **Phase 6**: In-memory mode and test utilities
+- ✅ **Phase 7**: Advanced error handling and crash recovery tests
+- ✅ **Phase 8**: Observability and configuration (stats(), health(), DatabaseConfig, benchmarks)
 
-**265 tests passing** across all crates
+**All tests passing** across all crates
 
 ## Performance
 
@@ -242,8 +326,15 @@ See [PERFORMANCE.md](PERFORMANCE.md) for optimization guidance and best practice
 
 ## Documentation
 
+### User Guides
+- [README.md](README.md) - This file: Getting started and feature overview
+- [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment and configuration guide
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues and solutions
+- [PERFORMANCE.md](PERFORMANCE.md) - Performance characteristics and optimization
+- [MONITORING.md](MONITORING.md) - Observability, metrics, and health checks
+
+### Developer Guides
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Internal design and implementation details
-- [PERFORMANCE.md](PERFORMANCE.md) - Performance characteristics and optimization guide
 - [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code
 
 ## Testing

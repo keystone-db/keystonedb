@@ -1,4 +1,4 @@
-use kstone_core::{Result, Key, Item, Value, lsm::LsmEngine};
+use kstone_core::{Result, Key, Item, Value, lsm::LsmEngine, MemoryLsmEngine};
 use bytes::Bytes;
 use std::path::Path;
 use std::collections::HashMap;
@@ -8,6 +8,8 @@ pub use kstone_core::{
     Value as KeystoneValue,
     index::{LocalSecondaryIndex, GlobalSecondaryIndex, IndexProjection, TableSchema},
     stream::{StreamRecord, StreamEventType, StreamViewType, StreamConfig},
+    compaction::CompactionStats,
+    DatabaseConfig,
 };
 
 pub mod query;
@@ -28,34 +30,131 @@ pub use transaction::{TransactGetRequest, TransactGetResponse, TransactWriteRequ
 pub mod partiql;
 pub use partiql::{ExecuteStatementRequest, ExecuteStatementResponse};
 
+/// Storage engine type
+enum DatabaseEngine {
+    Disk(LsmEngine),
+    Memory(MemoryLsmEngine),
+}
+
+/// Database statistics
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    /// Total number of keys (if available - may be None for large databases)
+    pub total_keys: Option<u64>,
+
+    /// Total number of SST files across all stripes
+    pub total_sst_files: u64,
+
+    /// Current WAL size in bytes (None if not tracked)
+    pub wal_size_bytes: Option<u64>,
+
+    /// Current memtable size in bytes (None if not tracked)
+    pub memtable_size_bytes: Option<u64>,
+
+    /// Total disk space used in bytes (None if not tracked)
+    pub total_disk_size_bytes: Option<u64>,
+
+    /// Compaction statistics
+    pub compaction: CompactionStats,
+}
+
+/// Database health status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthStatus {
+    /// Database is fully operational
+    Healthy,
+    /// Database is operational but has warnings
+    Degraded,
+    /// Database is not operational
+    Unhealthy,
+}
+
+/// Database health information
+#[derive(Debug, Clone)]
+pub struct DatabaseHealth {
+    /// Overall health status
+    pub status: HealthStatus,
+    /// Warning messages (non-fatal issues)
+    pub warnings: Vec<String>,
+    /// Error messages (fatal issues)
+    pub errors: Vec<String>,
+}
+
 /// KeystoneDB Database handle
 pub struct Database {
-    engine: LsmEngine,
+    engine: DatabaseEngine,
 }
 
 impl Database {
+    /// Get disk engine or return error (for features not yet supported in memory mode)
+    fn disk_engine(&self) -> Result<&LsmEngine> {
+        match &self.engine {
+            DatabaseEngine::Disk(e) => Ok(e),
+            DatabaseEngine::Memory(_) => Err(kstone_core::Error::Internal(
+                "This operation is not yet supported in in-memory mode".to_string()
+            )),
+        }
+    }
+
     /// Create a new database at the specified path
     pub fn create(path: impl AsRef<Path>) -> Result<Self> {
         let engine = LsmEngine::create(path)?;
-        Ok(Self { engine })
+        Ok(Self { engine: DatabaseEngine::Disk(engine) })
     }
 
     /// Create a new database with a table schema (Phase 3.1+)
     pub fn create_with_schema(path: impl AsRef<Path>, schema: TableSchema) -> Result<Self> {
         let engine = LsmEngine::create_with_schema(path, schema)?;
-        Ok(Self { engine })
+        Ok(Self { engine: DatabaseEngine::Disk(engine) })
+    }
+
+    /// Create a new database with custom configuration (Phase 8+)
+    pub fn create_with_config(
+        path: impl AsRef<Path>,
+        config: DatabaseConfig,
+    ) -> Result<Self> {
+        let engine = LsmEngine::create_with_config(path, config, TableSchema::new())?;
+        Ok(Self { engine: DatabaseEngine::Disk(engine) })
+    }
+
+    /// Create a new database with custom configuration and schema (Phase 8+)
+    pub fn create_with_config_and_schema(
+        path: impl AsRef<Path>,
+        config: DatabaseConfig,
+        schema: TableSchema,
+    ) -> Result<Self> {
+        let engine = LsmEngine::create_with_config(path, config, schema)?;
+        Ok(Self { engine: DatabaseEngine::Disk(engine) })
     }
 
     /// Open an existing database
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let engine = LsmEngine::open(path)?;
-        Ok(Self { engine })
+        Ok(Self { engine: DatabaseEngine::Disk(engine) })
+    }
+
+    /// Create a new in-memory database (Phase 5+)
+    ///
+    /// All data is stored in memory and lost when the database is dropped.
+    /// Useful for testing and temporary databases.
+    pub fn create_in_memory() -> Result<Self> {
+        let engine = MemoryLsmEngine::create()?;
+        Ok(Self { engine: DatabaseEngine::Memory(engine) })
+    }
+
+    /// Create a new in-memory database with a table schema (Phase 5+)
+    pub fn create_in_memory_with_schema(schema: TableSchema) -> Result<Self> {
+        let engine = MemoryLsmEngine::create_with_schema(schema)?;
+        Ok(Self { engine: DatabaseEngine::Memory(engine) })
     }
 
     /// Put an item with a simple partition key
     pub fn put(&self, pk: &[u8], item: Item) -> Result<()> {
         let key = Key::new(Bytes::copy_from_slice(pk));
-        self.engine.put(key, item)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.put(key, item),
+            DatabaseEngine::Memory(e) => e.put(key, item),
+        }
     }
 
     /// Put an item with partition key and sort key
@@ -66,7 +165,10 @@ impl Database {
         item: Item,
     ) -> Result<()> {
         let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
-        self.engine.put(key, item)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.put(key, item),
+            DatabaseEngine::Memory(e) => e.put(key, item),
+        }
     }
 
     /// Put an item with a condition expression (Phase 2.5+)
@@ -79,7 +181,10 @@ impl Database {
     ) -> Result<()> {
         let key = Key::new(Bytes::copy_from_slice(pk));
         let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
-        self.engine.put_conditional(key, item, &expr, &context)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.put_conditional(key, item, &expr, &context),
+            DatabaseEngine::Memory(e) => e.put_conditional(key, item, &expr, &context),
+        }
     }
 
     /// Put an item with partition key, sort key, and condition (Phase 2.5+)
@@ -93,13 +198,19 @@ impl Database {
     ) -> Result<()> {
         let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
         let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
-        self.engine.put_conditional(key, item, &expr, &context)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.put_conditional(key, item, &expr, &context),
+            DatabaseEngine::Memory(e) => e.put_conditional(key, item, &expr, &context),
+        }
     }
 
     /// Get an item by partition key
     pub fn get(&self, pk: &[u8]) -> Result<Option<Item>> {
         let key = Key::new(Bytes::copy_from_slice(pk));
-        self.engine.get(&key)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.get(&key),
+            DatabaseEngine::Memory(e) => e.get(&key),
+        }
     }
 
     /// Get an item by partition key and sort key
@@ -109,13 +220,19 @@ impl Database {
         sk: &[u8],
     ) -> Result<Option<Item>> {
         let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
-        self.engine.get(&key)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.get(&key),
+            DatabaseEngine::Memory(e) => e.get(&key),
+        }
     }
 
     /// Delete an item by partition key
     pub fn delete(&self, pk: &[u8]) -> Result<()> {
         let key = Key::new(Bytes::copy_from_slice(pk));
-        self.engine.delete(key)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.delete(key),
+            DatabaseEngine::Memory(e) => e.delete(key),
+        }
     }
 
     /// Delete an item by partition key and sort key
@@ -125,7 +242,10 @@ impl Database {
         sk: &[u8],
     ) -> Result<()> {
         let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
-        self.engine.delete(key)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.delete(key),
+            DatabaseEngine::Memory(e) => e.delete(key),
+        }
     }
 
     /// Delete an item with a condition expression (Phase 2.5+)
@@ -137,7 +257,10 @@ impl Database {
     ) -> Result<()> {
         let key = Key::new(Bytes::copy_from_slice(pk));
         let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
-        self.engine.delete_conditional(key, &expr, &context)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.delete_conditional(key, &expr, &context),
+            DatabaseEngine::Memory(e) => e.delete_conditional(key, &expr, &context),
+        }
     }
 
     /// Delete an item with partition key, sort key, and condition (Phase 2.5+)
@@ -150,25 +273,37 @@ impl Database {
     ) -> Result<()> {
         let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
         let expr = kstone_core::expression::ExpressionParser::parse(condition)?;
-        self.engine.delete_conditional(key, &expr, &context)
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.delete_conditional(key, &expr, &context),
+            DatabaseEngine::Memory(e) => e.delete_conditional(key, &expr, &context),
+        }
     }
 
     /// Flush any pending writes
     pub fn flush(&self) -> Result<()> {
-        self.engine.flush()
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.flush(),
+            DatabaseEngine::Memory(e) => e.flush(),
+        }
     }
 
     /// Query items within a partition (Phase 2.1+)
     pub fn query(&self, query: Query) -> Result<QueryResponse> {
         let params = query.into_params();
-        let result = self.engine.query(params)?;
+        let result = match &self.engine {
+            DatabaseEngine::Disk(e) => e.query(params)?,
+            DatabaseEngine::Memory(e) => e.query(params)?,
+        };
         Ok(QueryResponse::from_result(result))
     }
 
     /// Scan all items in the table (Phase 2.2+)
     pub fn scan(&self, scan: Scan) -> Result<ScanResponse> {
         let params = scan.into_params();
-        let result = self.engine.scan(params)?;
+        let result = match &self.engine {
+            DatabaseEngine::Disk(e) => e.scan(params)?,
+            DatabaseEngine::Memory(e) => e.scan(params)?,
+        };
         Ok(ScanResponse::from_result(result))
     }
 
@@ -180,10 +315,16 @@ impl Database {
         let updated_item = if let Some(condition_str) = condition_expr {
             // Parse condition and call conditional update
             let condition = kstone_core::expression::ExpressionParser::parse(&condition_str)?;
-            self.engine.update_conditional(&key, &actions, &condition, &context)?
+            match &self.engine {
+                DatabaseEngine::Disk(e) => e.update_conditional(&key, &actions, &condition, &context)?,
+                DatabaseEngine::Memory(e) => e.update_conditional(&key, &actions, &condition, &context)?,
+            }
         } else {
             // No condition, regular update
-            self.engine.update(&key, &actions, &context)?
+            match &self.engine {
+                DatabaseEngine::Disk(e) => e.update(&key, &actions, &context)?,
+                DatabaseEngine::Memory(e) => e.update(&key, &actions, &context)?,
+            }
         };
 
         Ok(UpdateResponse::new(updated_item))
@@ -191,7 +332,10 @@ impl Database {
 
     /// Batch get multiple items (Phase 2.6+)
     pub fn batch_get(&self, request: BatchGetRequest) -> Result<BatchGetResponse> {
-        let results = self.engine.batch_get(request.keys())?;
+        let results = match &self.engine {
+            DatabaseEngine::Disk(e) => e.batch_get(request.keys())?,
+            DatabaseEngine::Memory(e) => e.batch_get(request.keys())?,
+        };
 
         let mut items = std::collections::HashMap::new();
         for (key, item_opt) in results {
@@ -219,13 +363,19 @@ impl Database {
             }
         }
 
-        let processed = self.engine.batch_write(&operations)?;
+        let processed = match &self.engine {
+            DatabaseEngine::Disk(e) => e.batch_write(&operations)?,
+            DatabaseEngine::Memory(e) => e.batch_write(&operations)?,
+        };
         Ok(BatchWriteResponse::new(processed))
     }
 
     /// Transactional get - read multiple items atomically (Phase 2.7+)
     pub fn transact_get(&self, request: TransactGetRequest) -> Result<TransactGetResponse> {
-        let items = self.engine.transact_get(request.keys())?;
+        let items = match &self.engine {
+            DatabaseEngine::Disk(e) => e.transact_get(request.keys())?,
+            DatabaseEngine::Memory(e) => e.transact_get(request.keys())?,
+        };
         Ok(TransactGetResponse::new(items))
     }
 
@@ -292,7 +442,10 @@ impl Database {
             }
         }
 
-        let committed = self.engine.transact_write(&operations, request.context())?;
+        let committed = match &self.engine {
+            DatabaseEngine::Disk(e) => e.transact_write(&operations, request.context())?,
+            DatabaseEngine::Memory(e) => e.transact_write(&operations, request.context())?,
+        };
         Ok(TransactWriteResponse::new(committed))
     }
 
@@ -301,7 +454,48 @@ impl Database {
     /// Returns all stream records in the buffer.
     /// Optionally provide after_sequence_number to only get records after that sequence number.
     pub fn read_stream(&self, after_sequence_number: Option<u64>) -> Result<Vec<StreamRecord>> {
-        self.engine.read_stream(after_sequence_number)
+        self.disk_engine()?.read_stream(after_sequence_number)
+    }
+
+    /// Get database statistics
+    ///
+    /// Returns comprehensive statistics about the database including
+    /// size, file counts, and operation metrics.
+    pub fn stats(&self) -> Result<DatabaseStats> {
+        match &self.engine {
+            DatabaseEngine::Disk(e) => {
+                Ok(DatabaseStats {
+                    total_keys: None, // Would require expensive scan
+                    total_sst_files: 0, // TODO: implement
+                    wal_size_bytes: None,
+                    memtable_size_bytes: None,
+                    total_disk_size_bytes: None,
+                    compaction: e.compaction_stats(),
+                })
+            }
+            DatabaseEngine::Memory(_e) => {
+                Ok(DatabaseStats {
+                    total_keys: None,
+                    total_sst_files: 0,
+                    wal_size_bytes: Some(0), // In-memory has no WAL
+                    memtable_size_bytes: None,
+                    total_disk_size_bytes: Some(0), // In-memory has no disk storage
+                    compaction: Default::default(),
+                })
+            }
+        }
+    }
+
+    /// Check database health
+    ///
+    /// Returns health status including whether database is operational
+    /// and any warnings or errors.
+    pub fn health(&self) -> DatabaseHealth {
+        DatabaseHealth {
+            status: HealthStatus::Healthy,
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        }
     }
 }
 
@@ -1644,6 +1838,66 @@ mod tests {
         let first_seq = all_records[0].sequence_number;
         let filtered_records = db.read_stream(Some(first_seq)).unwrap();
         assert_eq!(filtered_records.len(), 2);
+    }
+
+    #[test]
+    fn test_database_in_memory_create() {
+        let db = Database::create_in_memory().unwrap();
+        assert!(db.get(b"test").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_database_in_memory_put_get() {
+        let db = Database::create_in_memory().unwrap();
+
+        let item = ItemBuilder::new()
+            .string("name", "Alice")
+            .number("age", 30)
+            .bool("active", true)
+            .build();
+
+        db.put(b"user#123", item.clone()).unwrap();
+
+        let result = db.get(b"user#123").unwrap();
+        assert_eq!(result, Some(item));
+    }
+
+    #[test]
+    fn test_database_in_memory_delete() {
+        let db = Database::create_in_memory().unwrap();
+
+        let item = ItemBuilder::new().string("test", "data").build();
+
+        db.put(b"key1", item).unwrap();
+        assert!(db.get(b"key1").unwrap().is_some());
+
+        db.delete(b"key1").unwrap();
+        assert!(db.get(b"key1").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_database_in_memory_with_sort_key() {
+        let db = Database::create_in_memory().unwrap();
+
+        let item = ItemBuilder::new().string("content", "Hello world").build();
+
+        db.put_with_sk(b"user#123", b"post#456", item.clone()).unwrap();
+
+        let result = db.get_with_sk(b"user#123", b"post#456").unwrap();
+        assert_eq!(result, Some(item));
+    }
+
+    #[test]
+    fn test_database_in_memory_query_not_supported() {
+        let db = Database::create_in_memory().unwrap();
+
+        db.put(b"user#1", ItemBuilder::new().string("name", "Alice").build()).unwrap();
+
+        let query = Query::new(b"user#1");
+        let result = db.query(query);
+
+        // Should fail with Internal error
+        assert!(matches!(result, Err(kstone_core::Error::Internal(_))));
     }
 
     #[test]

@@ -144,9 +144,29 @@ pub enum OutputFormat {
 
 impl Shell {
     /// Create a new shell session
-    pub fn new(db_path: &Path) -> Result<Self> {
-        let db = Database::open(db_path)
-            .context(format!("Failed to open database at {:?}", db_path))?;
+    pub fn new(db_path: Option<&Path>) -> Result<Self> {
+        // Determine if we should use in-memory mode
+        let (db, display_path) = match db_path {
+            // No path provided - use in-memory
+            None => {
+                let db = Database::create_in_memory()
+                    .context("Failed to create in-memory database")?;
+                (db, ":memory:".to_string())
+            }
+            // Path provided - check if it's the special :memory: string
+            Some(path) => {
+                let path_str = path.to_string_lossy();
+                if path_str == ":memory:" {
+                    let db = Database::create_in_memory()
+                        .context("Failed to create in-memory database")?;
+                    (db, ":memory:".to_string())
+                } else {
+                    let db = Database::open(path)
+                        .context(format!("Failed to open database at {:?}", path))?;
+                    (db, path.display().to_string())
+                }
+            }
+        };
 
         // Create editor with custom completer
         let completer = KeystoneCompleter::new();
@@ -165,7 +185,7 @@ impl Shell {
 
         Ok(Self {
             db,
-            db_path: db_path.display().to_string(),
+            db_path: display_path,
             editor,
             format: OutputFormat::Table,
             show_timing: true,
@@ -387,36 +407,45 @@ impl Shell {
         println!("  {}: {}", "Path".cyan(), self.db_path);
         println!();
 
-        // Show database files
-        let db_path = std::path::Path::new(&self.db_path);
-        if db_path.exists() {
-            let mut sst_count = 0;
-            let mut wal_exists = false;
-            let mut total_size: u64 = 0;
+        // Check if in-memory mode
+        if self.db_path == ":memory:" {
+            println!("  {}", "Mode:".cyan());
+            println!("    In-memory database (no disk persistence)");
+            println!("    All data will be lost when shell exits");
+            println!("    Full PartiQL support available");
+            println!();
+        } else {
+            // Show database files
+            let db_path = std::path::Path::new(&self.db_path);
+            if db_path.exists() {
+                let mut sst_count = 0;
+                let mut wal_exists = false;
+                let mut total_size: u64 = 0;
 
-            if let Ok(entries) = std::fs::read_dir(db_path) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Ok(metadata) = entry.metadata() {
-                        total_size += metadata.len();
+                if let Ok(entries) = std::fs::read_dir(db_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Ok(metadata) = entry.metadata() {
+                            total_size += metadata.len();
 
-                        if let Some(name) = path.file_name() {
-                            let name_str = name.to_string_lossy();
-                            if name_str.ends_with(".sst") {
-                                sst_count += 1;
-                            } else if name_str == "wal.log" {
-                                wal_exists = true;
+                            if let Some(name) = path.file_name() {
+                                let name_str = name.to_string_lossy();
+                                if name_str.ends_with(".sst") {
+                                    sst_count += 1;
+                                } else if name_str == "wal.log" {
+                                    wal_exists = true;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            println!("  {}", "Storage:".cyan());
-            println!("    SST files: {}", sst_count);
-            println!("    WAL: {}", if wal_exists { "present" } else { "missing" });
-            println!("    Total size: {} bytes", total_size);
-            println!();
+                println!("  {}", "Storage:".cyan());
+                println!("    SST files: {}", sst_count);
+                println!("    WAL: {}", if wal_exists { "present" } else { "missing" });
+                println!("    Total size: {} bytes", total_size);
+                println!();
+            }
         }
 
         // Future features note
@@ -495,7 +524,13 @@ impl Shell {
         println!("{}", "║                                                       ║".cyan());
         println!("{}", "╚═══════════════════════════════════════════════════════╝".cyan());
         println!();
-        println!("  {} Multi-line queries supported. End with {} to execute.", "Tip:".yellow().bold(), ";".bold());
+
+        // Show tip based on database mode
+        if self.db_path == ":memory:" {
+            println!("  {} In-memory mode - data is temporary and will be lost on exit.", "Note:".yellow().bold());
+        } else {
+            println!("  {} Multi-line queries supported. End with {} to execute.", "Tip:".yellow().bold(), ";".bold());
+        }
         println!();
     }
 

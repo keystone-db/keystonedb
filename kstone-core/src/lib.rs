@@ -7,6 +7,9 @@ pub mod mmap;
 pub mod bloom; // Phase 1.4+ bloom filters
 pub mod wal;
 pub mod wal_ring; // Phase 1.3+ ring buffer WAL
+pub mod memory_wal; // Phase 5+ in-memory WAL
+pub mod memory_sst; // Phase 5+ in-memory SST
+pub mod memory_lsm; // Phase 5+ in-memory LSM engine
 pub mod sst;
 pub mod sst_block; // Phase 1.4+ block-based SST
 pub mod compaction; // Phase 5+ background compaction
@@ -18,8 +21,13 @@ pub mod expression; // Phase 2.3+ expression system
 pub mod index; // Phase 3.1+ index support (LSI, GSI)
 pub mod stream; // Phase 3.4+ change data capture (streams)
 pub mod partiql; // Phase 4+ PartiQL (SQL-compatible query language)
+pub mod config; // Phase 8+ database configuration
+pub mod retry; // Phase 8+ retry logic with exponential backoff
 
 pub use error::{Error, Result};
 pub use types::*;
 pub use lsm::{LsmEngine, TransactWriteOperation};
+pub use memory_lsm::MemoryLsmEngine;
 pub use compaction::{CompactionConfig, CompactionStats};
+pub use config::DatabaseConfig;
+pub use retry::{RetryPolicy, retry_with_policy, retry};

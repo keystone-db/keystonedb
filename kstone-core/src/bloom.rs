@@ -6,6 +6,7 @@
 use bytes::{Bytes, BytesMut, BufMut};
 
 /// Bloom filter with configurable bits per key
+#[derive(Clone)]
 pub struct BloomFilter {
     /// Bit array
     bits: Vec<u8>,

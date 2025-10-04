@@ -72,8 +72,8 @@ enum Commands {
     },
     /// Start interactive shell
     Shell {
-        /// Database file path
-        path: PathBuf,
+        /// Database file path (optional, defaults to :memory:)
+        path: Option<PathBuf>,
     },
 }
 
@@ -196,7 +196,7 @@ fn main() -> Result<()> {
         }
 
         Commands::Shell { path } => {
-            let mut shell = shell::Shell::new(&path)?;
+            let mut shell = shell::Shell::new(path.as_deref())?;
             shell.run()?;
         }
     }

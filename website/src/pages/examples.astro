@@ -1,0 +1,220 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { ExternalLink, Github } from 'lucide-react';
+
+const examples = [
+  {
+    title: 'URL Shortener',
+    description: 'A simple URL shortening service demonstrating basic CRUD operations, TTL for automatic expiration, and visit counters with conditional updates.',
+    features: ['Basic CRUD', 'TTL Expiration', 'Visit Counter', 'REST API', 'Health Checks'],
+    tech: ['Axum', 'Serde', 'Nanoid'],
+    github: 'https://github.com/keystonedb/keystonedb/tree/main/examples/url-shortener',
+    difficulty: 'Beginner',
+  },
+  {
+    title: 'Cache Server',
+    description: 'High-performance in-memory cache server with TTL-based expiration, configurable resource limits, and LRU eviction.',
+    features: ['In-Memory Mode', 'TTL Expiration', 'LRU Eviction', 'Prometheus Metrics', 'Resource Limits'],
+    tech: ['Axum', 'Tokio', 'Prometheus'],
+    github: 'https://github.com/keystonedb/keystonedb/tree/main/examples/cache-server',
+    difficulty: 'Intermediate',
+  },
+  {
+    title: 'Todo List API',
+    description: 'Complete todo list REST API with update expressions, conditional operations, transactions for batch operations, and Global Secondary Index.',
+    features: ['Update Expressions', 'Conditional Ops', 'Transactions', 'GSI', 'State Machine'],
+    tech: ['Axum', 'Serde', 'UUID'],
+    github: 'https://github.com/keystonedb/keystonedb/tree/main/examples/todo-api',
+    difficulty: 'Intermediate',
+  },
+  {
+    title: 'Blog Engine',
+    description: 'Multi-user blog platform with advanced querying, composite keys, secondary indexes, PartiQL queries for analytics, and real-time updates.',
+    features: ['Composite Keys', 'LSI + GSI', 'PartiQL', 'Pagination', 'Server-Sent Events'],
+    tech: ['Axum', 'Tokio', 'UUID'],
+    github: 'https://github.com/keystonedb/keystonedb/tree/main/examples/blog-engine',
+    difficulty: 'Advanced',
+  },
+];
+
+const difficultyColors = {
+  'Beginner': 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+  'Intermediate': 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
+  'Advanced': 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
+};
+---
+
+<BaseLayout title="KeystoneDB Examples" description="Learn KeystoneDB through real-world example applications">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          Example Applications
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+          Learn from real-world applications showcasing KeystoneDB features
+        </p>
+      </div>
+
+      <!-- Learning Path -->
+      <div class="card max-w-4xl mx-auto mb-16">
+        <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">Learning Path</h2>
+        <p class="text-slate-600 dark:text-slate-300 mb-6">
+          We recommend following these examples in order to progressively learn KeystoneDB features:
+        </p>
+        <div class="grid md:grid-cols-4 gap-4">
+          <div class="text-center">
+            <div class="w-12 h-12 rounded-full bg-green-500 text-white font-bold flex items-center justify-center mx-auto mb-2">1</div>
+            <div class="text-sm font-semibold">URL Shortener</div>
+            <div class="text-xs text-slate-600 dark:text-slate-400">Basics</div>
+          </div>
+          <div class="text-center">
+            <div class="w-12 h-12 rounded-full bg-blue-500 text-white font-bold flex items-center justify-center mx-auto mb-2">2</div>
+            <div class="text-sm font-semibold">Cache Server</div>
+            <div class="text-xs text-slate-600 dark:text-slate-400">In-Memory</div>
+          </div>
+          <div class="text-center">
+            <div class="w-12 h-12 rounded-full bg-purple-500 text-white font-bold flex items-center justify-center mx-auto mb-2">3</div>
+            <div class="text-sm font-semibold">Todo API</div>
+            <div class="text-xs text-slate-600 dark:text-slate-400">Advanced Ops</div>
+          </div>
+          <div class="text-center">
+            <div class="w-12 h-12 rounded-full bg-pink-500 text-white font-bold flex items-center justify-center mx-auto mb-2">4</div>
+            <div class="text-sm font-semibold">Blog Engine</div>
+            <div class="text-xs text-slate-600 dark:text-slate-400">Full Stack</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Examples Grid -->
+      <div class="grid lg:grid-cols-2 gap-8">
+        {examples.map((example) => (
+          <div class="card hover:shadow-xl transition-all">
+            <div class="flex items-start justify-between mb-4">
+              <h2 class="text-2xl font-bold text-slate-900 dark:text-white">{example.title}</h2>
+              <span class={`px-3 py-1 rounded-full text-xs font-semibold ${difficultyColors[example.difficulty]}`}>
+                {example.difficulty}
+              </span>
+            </div>
+
+            <p class="text-slate-600 dark:text-slate-300 mb-6">
+              {example.description}
+            </p>
+
+            <div class="mb-6">
+              <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Features Demonstrated:</h3>
+              <div class="flex flex-wrap gap-2">
+                {example.features.map((feature) => (
+                  <span class="px-3 py-1 bg-slate-100 dark:bg-slate-800 rounded-full text-sm text-slate-700 dark:text-slate-300">
+                    {feature}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div class="mb-6">
+              <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Technologies:</h3>
+              <div class="flex flex-wrap gap-2">
+                {example.tech.map((tech) => (
+                  <span class="px-3 py-1 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 rounded-full text-sm">
+                    {tech}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div class="pt-6 border-t border-slate-200 dark:border-slate-700">
+              <a
+                href={example.github}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-primary w-full justify-center"
+              >
+                <Github className="w-5 h-5" />
+                View on GitHub
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <!-- Code Snippet -->
+      <div class="mt-16">
+        <h2 class="text-3xl font-bold text-slate-900 dark:text-white mb-8 text-center">
+          Quick Example
+        </h2>
+        <div class="card max-w-4xl mx-auto p-0 overflow-hidden">
+          <div class="bg-slate-900 dark:bg-slate-950 p-6">
+            <div class="flex items-center gap-2 mb-4">
+              <div class="w-3 h-3 rounded-full bg-red-500"></div>
+              <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <div class="w-3 h-3 rounded-full bg-green-500"></div>
+              <span class="ml-2 text-slate-400 text-sm font-mono">url_shortener.rs</span>
+            </div>
+            <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="language-rust">use kstone_api::&#123;Database, ItemBuilder&#125;;
+use axum::&#123;Router, routing::*, Json&#125;;
+
+#[tokio::main]
+async fn main() &#123;
+    // Create database
+    let db = Database::create("urls.keystone").unwrap();
+
+    // Build REST API
+    let app = Router::new()
+        .route("/shorten", post(shorten_url))
+        .route("/:code", get(redirect_url))
+        .with_state(db);
+
+    axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
+&#125;
+
+async fn shorten_url(
+    State(db): State&lt;Database&gt;,
+    Json(req): Json&lt;ShortenRequest&gt;,
+) -> Json&lt;ShortenResponse&gt; &#123;
+    let code = nanoid::nanoid!(8);
+
+    // Store with 30-day TTL
+    let expiry = now() + (30 * 24 * 60 * 60);
+    let item = ItemBuilder::new()
+        .string("url", &req.long_url)
+        .number("created", now())
+        .number("expiresAt", expiry)
+        .build();
+
+    db.put(code.as_bytes(), item).unwrap();
+
+    Json(ShortenResponse &#123; code &#125;)
+&#125;</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Next Steps -->
+      <div class="mt-16 text-center">
+        <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-6">
+          Ready to Build Your Own?
+        </h2>
+        <div class="flex flex-wrap justify-center gap-4">
+          <a href="/docs" class="btn btn-primary">
+            Read the Documentation
+          </a>
+          <a href="/download" class="btn btn-outline">
+            Download KeystoneDB
+          </a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

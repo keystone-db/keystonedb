@@ -1,0 +1,221 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { Download, Terminal, Package, Rocket } from 'lucide-react';
+---
+
+<BaseLayout title="Download KeystoneDB" description="Download and install KeystoneDB - Single-file embedded database">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          Download KeystoneDB
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+          Choose your preferred installation method and get started in minutes
+        </p>
+      </div>
+
+      <!-- Installation Methods -->
+      <div class="grid md:grid-cols-2 gap-8 mb-16">
+        <!-- Build from Source -->
+        <div class="card">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-12 h-12 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center">
+              <Terminal className="w-6 h-6 text-primary-600 dark:text-primary-400" />
+            </div>
+            <h2 class="text-2xl font-bold">Build from Source</h2>
+          </div>
+          <p class="text-slate-600 dark:text-slate-300 mb-6">
+            Build the latest version directly from GitHub. Requires Rust 1.70+
+          </p>
+          <div class="bg-slate-900 dark:bg-slate-950 rounded-lg p-4 mb-4">
+            <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="text-slate-300"># Clone the repository
+git clone https://github.com/keystonedb/keystonedb.git
+cd keystonedb
+
+# Build release binary
+cargo build --release
+
+# Binary at target/release/kstone
+./target/release/kstone --version</code></pre>
+          </div>
+          <div class="flex gap-3">
+            <a href="https://github.com/keystonedb/keystonedb" target="_blank" class="btn btn-primary flex-1 justify-center">
+              View on GitHub
+            </a>
+          </div>
+        </div>
+
+        <!-- Cargo Install -->
+        <div class="card">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-12 h-12 rounded-lg bg-accent-100 dark:bg-accent-900 flex items-center justify-center">
+              <Package className="w-6 h-6 text-accent-600 dark:text-accent-400" />
+            </div>
+            <h2 class="text-2xl font-bold">Cargo Install</h2>
+          </div>
+          <p class="text-slate-600 dark:text-slate-300 mb-6">
+            Install via Cargo package manager. Easiest method for Rust developers.
+          </p>
+          <div class="bg-slate-900 dark:bg-slate-950 rounded-lg p-4 mb-4">
+            <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="text-slate-300"># Install from crates.io (coming soon)
+cargo install keystonedb
+
+# Or install from git
+cargo install --git https://github.com/keystonedb/keystonedb kstone-cli
+
+# Verify installation
+kstone --version</code></pre>
+          </div>
+          <div class="px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p class="text-sm text-blue-800 dark:text-blue-300">
+              <strong>Note:</strong> Crates.io package coming soon. Use build from source for now.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Platform-Specific Binaries -->
+      <div class="mb-16">
+        <h2 class="text-3xl font-bold text-slate-900 dark:text-white mb-8 text-center">
+          Prebuilt Binaries
+        </h2>
+        <div class="card max-w-4xl mx-auto">
+          <p class="text-slate-600 dark:text-slate-300 mb-6">
+            Download precompiled binaries for your platform:
+          </p>
+
+          <div class="space-y-4">
+            <!-- Linux -->
+            <div class="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+              <div class="flex items-center gap-4">
+                <div class="text-4xl">🐧</div>
+                <div>
+                  <div class="font-semibold text-slate-900 dark:text-white">Linux (x86_64)</div>
+                  <div class="text-sm text-slate-600 dark:text-slate-400">Ubuntu 20.04+, Debian 11+, or similar</div>
+                </div>
+              </div>
+              <a href="#" class="btn btn-primary">
+                <Download className="w-4 h-4" />
+                Coming Soon
+              </a>
+            </div>
+
+            <!-- macOS -->
+            <div class="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+              <div class="flex items-center gap-4">
+                <div class="text-4xl">🍎</div>
+                <div>
+                  <div class="font-semibold text-slate-900 dark:text-white">macOS (Universal)</div>
+                  <div class="text-sm text-slate-600 dark:text-slate-400">Intel and Apple Silicon</div>
+                </div>
+              </div>
+              <a href="#" class="btn btn-primary">
+                <Download className="w-4 h-4" />
+                Coming Soon
+              </a>
+            </div>
+
+            <!-- Windows -->
+            <div class="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+              <div class="flex items-center gap-4">
+                <div class="text-4xl">🪟</div>
+                <div>
+                  <div class="font-semibold text-slate-900 dark:text-white">Windows (x86_64)</div>
+                  <div class="text-sm text-slate-600 dark:text-slate-400">Windows 10+</div>
+                </div>
+              </div>
+              <a href="#" class="btn btn-primary">
+                <Download className="w-4 h-4" />
+                Coming Soon
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Docker -->
+      <div class="mb-16">
+        <h2 class="text-3xl font-bold text-slate-900 dark:text-white mb-8 text-center">
+          Docker Images
+        </h2>
+        <div class="grid md:grid-cols-2 gap-8">
+          <!-- CLI Image -->
+          <div class="card">
+            <h3 class="text-xl font-bold mb-4">CLI Image</h3>
+            <p class="text-slate-600 dark:text-slate-300 mb-4">
+              Run KeystoneDB CLI in a container:
+            </p>
+            <div class="bg-slate-900 dark:bg-slate-950 rounded-lg p-4">
+              <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="text-slate-300"># Pull image (coming soon)
+docker pull keystonedb/kstone:latest
+
+# Run CLI
+docker run -v $(pwd):/data keystonedb/kstone \
+  create /data/mydb.keystone</code></pre>
+            </div>
+          </div>
+
+          <!-- Server Image -->
+          <div class="card">
+            <h3 class="text-xl font-bold mb-4">Server Image</h3>
+            <p class="text-slate-600 dark:text-slate-300 mb-4">
+              Run gRPC server in a container:
+            </p>
+            <div class="bg-slate-900 dark:bg-slate-950 rounded-lg p-4">
+              <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="text-slate-300"># Pull server image (coming soon)
+docker pull keystonedb/kstone-server:latest
+
+# Run server
+docker run -p 50051:50051 -v $(pwd):/data \
+  keystonedb/kstone-server --db-path /data/mydb.keystone</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Next Steps -->
+      <div class="text-center">
+        <h2 class="text-3xl font-bold text-slate-900 dark:text-white mb-8">
+          Next Steps
+        </h2>
+        <div class="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
+          <a href="/docs" class="card hover:shadow-xl transition-all">
+            <div class="w-12 h-12 rounded-lg bg-primary-100 dark:bg-primary-900 flex items-center justify-center mb-4 mx-auto">
+              📚
+            </div>
+            <h3 class="font-bold mb-2">Read the Docs</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+              Complete guide from basics to advanced features
+            </p>
+          </a>
+          <a href="/examples" class="card hover:shadow-xl transition-all">
+            <div class="w-12 h-12 rounded-lg bg-accent-100 dark:bg-accent-900 flex items-center justify-center mb-4 mx-auto">
+              💡
+            </div>
+            <h3 class="font-bold mb-2">View Examples</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+              Learn from real-world example applications
+            </p>
+          </a>
+          <a href="/community" class="card hover:shadow-xl transition-all">
+            <div class="w-12 h-12 rounded-lg bg-green-100 dark:bg-green-900 flex items-center justify-center mb-4 mx-auto">
+              👥
+            </div>
+            <h3 class="font-bold mb-2">Join Community</h3>
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+              Get help and connect with other users
+            </p>
+          </a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

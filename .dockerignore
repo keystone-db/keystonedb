@@ -1,0 +1,45 @@
+# Build outputs
+target/
+*.keystone/
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Documentation
+*.md
+book/
+website/
+
+# Examples (not needed for binaries)
+examples/
+blog-engine.keystone/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CI/CD
+.github/
+.travis.yml
+.gitlab-ci.yml
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Misc
+*.log
+*.bak
+*.tmp
+.env
+.env.*

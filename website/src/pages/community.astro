@@ -1,0 +1,250 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { Github, MessageSquare, Users, BookOpen, GitPullRequest, Star } from 'lucide-react';
+---
+
+<BaseLayout title="KeystoneDB Community" description="Join the KeystoneDB community - contribute, get help, and connect with other users">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          Join Our Community
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+          Get help, share ideas, and contribute to KeystoneDB
+        </p>
+      </div>
+
+      <!-- Community Channels -->
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mb-16">
+        <a href="https://github.com/keystonedb/keystonedb" target="_blank" class="card hover:shadow-xl transition-all group">
+          <div class="w-12 h-12 rounded-lg bg-slate-900 dark:bg-slate-700 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <Github className="w-6 h-6 text-white" />
+          </div>
+          <h3 class="text-xl font-bold mb-2">GitHub</h3>
+          <p class="text-slate-600 dark:text-slate-300">
+            Star the repo, report issues, and contribute code
+          </p>
+        </a>
+
+        <a href="https://discord.gg/keystonedb" target="_blank" class="card hover:shadow-xl transition-all group">
+          <div class="w-12 h-12 rounded-lg bg-indigo-600 dark:bg-indigo-700 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <MessageSquare className="w-6 h-6 text-white" />
+          </div>
+          <h3 class="text-xl font-bold mb-2">Discord</h3>
+          <p class="text-slate-600 dark:text-slate-300">
+            Real-time chat with maintainers and users
+          </p>
+        </a>
+
+        <a href="https://github.com/keystonedb/keystonedb/discussions" target="_blank" class="card hover:shadow-xl transition-all group">
+          <div class="w-12 h-12 rounded-lg bg-primary-600 dark:bg-primary-700 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+            <Users className="w-6 h-6 text-white" />
+          </div>
+          <h3 class="text-xl font-bold mb-2">Discussions</h3>
+          <p class="text-slate-600 dark:text-slate-300">
+            Q&A, ideas, and announcements
+          </p>
+        </a>
+      </div>
+
+      <!-- Contributing -->
+      <div id="contributing" class="mb-16">
+        <h2 class="text-3xl font-bold text-slate-900 dark:text-white mb-8 text-center">
+          Contributing
+        </h2>
+        <div class="card max-w-4xl mx-auto">
+          <p class="text-lg text-slate-600 dark:text-slate-300 mb-8">
+            We welcome contributions from everyone! Here's how you can help:
+          </p>
+
+          <div class="space-y-6">
+            <div class="flex gap-4">
+              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center text-primary-600 dark:text-primary-400 font-bold">
+                1
+              </div>
+              <div>
+                <h3 class="font-bold text-slate-900 dark:text-white mb-2">Report Bugs</h3>
+                <p class="text-slate-600 dark:text-slate-300">
+                  Found a bug? Open an issue on GitHub with a detailed description and reproduction steps.
+                </p>
+              </div>
+            </div>
+
+            <div class="flex gap-4">
+              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center text-primary-600 dark:text-primary-400 font-bold">
+                2
+              </div>
+              <div>
+                <h3 class="font-bold text-slate-900 dark:text-white mb-2">Suggest Features</h3>
+                <p class="text-slate-600 dark:text-slate-300">
+                  Have an idea? Start a discussion to propose new features and gather feedback.
+                </p>
+              </div>
+            </div>
+
+            <div class="flex gap-4">
+              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center text-primary-600 dark:text-primary-400 font-bold">
+                3
+              </div>
+              <div>
+                <h3 class="font-bold text-slate-900 dark:text-white mb-2">Improve Documentation</h3>
+                <p class="text-slate-600 dark:text-slate-300">
+                  Fix typos, add examples, or write tutorials. Documentation PRs are always welcome!
+                </p>
+              </div>
+            </div>
+
+            <div class="flex gap-4">
+              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center text-primary-600 dark:text-primary-400 font-bold">
+                4
+              </div>
+              <div>
+                <h3 class="font-bold text-slate-900 dark:text-white mb-2">Write Code</h3>
+                <p class="text-slate-600 dark:text-slate-300">
+                  Fix bugs, implement features, or optimize performance. Check "good first issue" labels on GitHub.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-8 pt-8 border-t border-slate-200 dark:border-slate-700">
+            <a href="https://github.com/keystonedb/keystonedb/blob/main/CONTRIBUTING.md" target="_blank" class="btn btn-primary">
+              <GitPullRequest className="w-5 h-5" />
+              View Contributing Guide
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Code of Conduct -->
+      <div id="code-of-conduct" class="mb-16">
+        <h2 class="text-3xl font-bold text-slate-900 dark:text-white mb-8 text-center">
+          Code of Conduct
+        </h2>
+        <div class="card max-w-4xl mx-auto">
+          <p class="text-slate-600 dark:text-slate-300 mb-6">
+            KeystoneDB is committed to providing a welcoming and harassment-free experience for everyone. We expect all participants to:
+          </p>
+          <ul class="space-y-3 text-slate-600 dark:text-slate-300">
+            <li class="flex gap-3">
+              <span class="text-green-600 dark:text-green-400">✓</span>
+              <span>Be respectful and inclusive in all interactions</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="text-green-600 dark:text-green-400">✓</span>
+              <span>Welcome newcomers and help them learn</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="text-green-600 dark:text-green-400">✓</span>
+              <span>Focus on constructive feedback and collaboration</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="text-green-600 dark:text-green-400">✓</span>
+              <span>Respect differing viewpoints and experiences</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="text-red-600 dark:text-red-400">✗</span>
+              <span>Harassment, discrimination, or inappropriate behavior of any kind</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Roadmap -->
+      <div id="roadmap" class="mb-16">
+        <h2 class="text-3xl font-bold text-slate-900 dark:text-white mb-8 text-center">
+          Roadmap
+        </h2>
+        <div class="card max-w-4xl mx-auto">
+          <div class="space-y-6">
+            <!-- Phase 8 -->
+            <div>
+              <div class="flex items-center gap-3 mb-3">
+                <div class="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center">
+                  <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                  </svg>
+                </div>
+                <h3 class="font-bold text-green-600 dark:text-green-400">Phase 8: Complete ✓</h3>
+              </div>
+              <p class="text-slate-600 dark:text-slate-300 ml-9">
+                Core features, indexes, transactions, PartiQL, network layer, observability
+              </p>
+            </div>
+
+            <!-- Phase 9 -->
+            <div>
+              <div class="flex items-center gap-3 mb-3">
+                <div class="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center">
+                  <div class="w-3 h-3 rounded-full bg-white"></div>
+                </div>
+                <h3 class="font-bold text-blue-600 dark:text-blue-400">Phase 9: Planned</h3>
+              </div>
+              <p class="text-slate-600 dark:text-slate-300 ml-9">
+                Advanced compaction (leveled strategy), vector search (HNSW), full-text search
+              </p>
+            </div>
+
+            <!-- Phase 10 -->
+            <div>
+              <div class="flex items-center gap-3 mb-3">
+                <div class="w-6 h-6 rounded-full border-2 border-slate-300 dark:border-slate-600"></div>
+                <h3 class="font-bold text-slate-600 dark:text-slate-400">Phase 10: Future</h3>
+              </div>
+              <p class="text-slate-600 dark:text-slate-300 ml-9">
+                Cloud synchronization, DynamoDB sync, peer-to-peer replication
+              </p>
+            </div>
+          </div>
+
+          <div class="mt-8 pt-8 border-t border-slate-200 dark:border-slate-700">
+            <p class="text-sm text-slate-600 dark:text-slate-400">
+              See the full roadmap and vote on features in our
+              <a href="https://github.com/keystonedb/keystonedb/discussions" target="_blank" class="text-primary-600 dark:text-primary-400 hover:underline">GitHub Discussions</a>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="grid md:grid-cols-4 gap-6">
+        <div class="card text-center">
+          <div class="text-3xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+            <Star className="w-8 h-8 mx-auto mb-2" />
+            100+
+          </div>
+          <div class="text-sm text-slate-600 dark:text-slate-400">GitHub Stars</div>
+        </div>
+        <div class="card text-center">
+          <div class="text-3xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+            <GitPullRequest className="w-8 h-8 mx-auto mb-2" />
+            50+
+          </div>
+          <div class="text-sm text-slate-600 dark:text-slate-400">Contributors</div>
+        </div>
+        <div class="card text-center">
+          <div class="text-3xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+            <Users className="w-8 h-8 mx-auto mb-2" />
+            200+
+          </div>
+          <div class="text-sm text-slate-600 dark:text-slate-400">Community Members</div>
+        </div>
+        <div class="card text-center">
+          <div class="text-3xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+            <BookOpen className="w-8 h-8 mx-auto mb-2" />
+            124K+
+          </div>
+          <div class="text-sm text-slate-600 dark:text-slate-400">Words of Docs</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

@@ -1,15 +1,291 @@
 # KeystoneDB Observability & Monitoring
 
-This document describes the observability features built into KeystoneDB server and how to use them for monitoring and debugging.
+This document describes the observability features built into KeystoneDB and how to use them for monitoring and debugging.
 
 ## Overview
 
-KeystoneDB server includes comprehensive observability features:
+KeystoneDB includes comprehensive observability features:
 
+- **Database Statistics API** - Runtime metrics via `db.stats()` (Phase 8+)
+- **Health Check API** - Operational status via `db.health()` (Phase 8+)
 - **Structured Logging** - Detailed logs with context using the `tracing` crate
-- **Prometheus Metrics** - Performance and operational metrics in Prometheus format
-- **Health Checks** - Liveness and readiness endpoints for orchestration systems
-- **Request Tracing** - Unique trace IDs for correlating logs across request lifecycle
+- **Prometheus Metrics** - Performance and operational metrics in Prometheus format (server mode)
+- **Health Endpoints** - Liveness and readiness endpoints for orchestration systems (server mode)
+- **Request Tracing** - Unique trace IDs for correlating logs across request lifecycle (server mode)
+
+## Database Statistics API
+
+KeystoneDB provides a `stats()` method for retrieving runtime metrics (Phase 8+).
+
+### Using stats()
+
+```rust
+use kstone_api::Database;
+
+let db = Database::open("/data/mydb.keystone")?;
+
+// Get database statistics
+let stats = db.stats()?;
+
+println!("Database Statistics:");
+println!("  Total SST files: {}", stats.total_sst_files);
+println!("  WAL size: {:?}", stats.wal_size_bytes);
+println!("  Memtable size: {:?}", stats.memtable_size_bytes);
+println!("  Total disk size: {:?}", stats.total_disk_size_bytes);
+
+// Compaction statistics
+println!("\nCompaction Statistics:");
+println!("  Total compactions: {}", stats.compaction.total_compactions);
+println!("  SSTs merged: {}", stats.compaction.total_ssts_merged);
+println!("  SSTs created: {}", stats.compaction.total_ssts_created);
+println!("  Bytes read: {}", stats.compaction.total_bytes_read);
+println!("  Bytes written: {}", stats.compaction.total_bytes_written);
+println!("  Bytes reclaimed: {}", stats.compaction.total_bytes_reclaimed);
+println!("  Records deduplicated: {}", stats.compaction.total_records_deduplicated);
+println!("  Tombstones removed: {}", stats.compaction.total_tombstones_removed);
+println!("  Active compactions: {}", stats.compaction.active_compactions);
+```
+
+### DatabaseStats Fields
+
+```rust
+pub struct DatabaseStats {
+    /// Total number of keys (if available - may be None for large databases)
+    pub total_keys: Option<u64>,
+
+    /// Total number of SST files across all stripes
+    pub total_sst_files: u64,
+
+    /// Current WAL size in bytes (None if not tracked)
+    pub wal_size_bytes: Option<u64>,
+
+    /// Current memtable size in bytes (None if not tracked)
+    pub memtable_size_bytes: Option<u64>,
+
+    /// Total disk space used in bytes (None if not tracked)
+    pub total_disk_size_bytes: Option<u64>,
+
+    /// Compaction statistics
+    pub compaction: CompactionStats,
+}
+```
+
+### CompactionStats Fields
+
+```rust
+pub struct CompactionStats {
+    /// Total number of compactions performed
+    pub total_compactions: u64,
+
+    /// Total number of SSTs merged
+    pub total_ssts_merged: u64,
+
+    /// Total number of SSTs created
+    pub total_ssts_created: u64,
+
+    /// Total bytes read during compaction
+    pub total_bytes_read: u64,
+
+    /// Total bytes written during compaction
+    pub total_bytes_written: u64,
+
+    /// Total bytes reclaimed (space saved)
+    pub total_bytes_reclaimed: u64,
+
+    /// Total records deduplicated
+    pub total_records_deduplicated: u64,
+
+    /// Total tombstones removed
+    pub total_tombstones_removed: u64,
+
+    /// Number of active compactions
+    pub active_compactions: u64,
+}
+```
+
+### Monitoring with stats()
+
+**Check write amplification:**
+```rust
+let stats = db.stats()?;
+let write_amp = stats.compaction.total_bytes_written as f64
+    / stats.compaction.total_bytes_read as f64;
+println!("Write amplification: {:.2}x", write_amp);
+
+if write_amp > 5.0 {
+    println!("WARNING: High write amplification detected");
+}
+```
+
+**Monitor compaction effectiveness:**
+```rust
+let stats = db.stats()?;
+println!("Space reclaimed: {} bytes", stats.compaction.total_bytes_reclaimed);
+println!("Tombstones removed: {}", stats.compaction.total_tombstones_removed);
+println!("Records deduplicated: {}", stats.compaction.total_records_deduplicated);
+```
+
+**Track compaction activity:**
+```rust
+let stats = db.stats()?;
+println!("Active compactions: {}", stats.compaction.active_compactions);
+println!("Total compactions: {}", stats.compaction.total_compactions);
+```
+
+## Database Health API
+
+KeystoneDB provides a `health()` method for checking operational status (Phase 8+).
+
+### Using health()
+
+```rust
+use kstone_api::{Database, HealthStatus};
+
+let db = Database::open("/data/mydb.keystone")?;
+
+// Check database health
+let health = db.health();
+
+match health.status {
+    HealthStatus::Healthy => {
+        println!("✓ Database is healthy");
+    }
+    HealthStatus::Degraded => {
+        println!("⚠ Database is degraded:");
+        for warning in &health.warnings {
+            println!("  - {}", warning);
+        }
+    }
+    HealthStatus::Unhealthy => {
+        println!("✗ Database is unhealthy:");
+        for error in &health.errors {
+            println!("  - {}", error);
+        }
+        // Take corrective action
+    }
+}
+```
+
+### HealthStatus Enum
+
+```rust
+pub enum HealthStatus {
+    /// Database is fully operational
+    Healthy,
+    /// Database is operational but has warnings
+    Degraded,
+    /// Database is not operational
+    Unhealthy,
+}
+```
+
+### DatabaseHealth Struct
+
+```rust
+pub struct DatabaseHealth {
+    /// Overall health status
+    pub status: HealthStatus,
+    /// Warning messages (non-fatal issues)
+    pub warnings: Vec<String>,
+    /// Error messages (fatal issues)
+    pub errors: Vec<String>,
+}
+```
+
+### Health Check Examples
+
+**Example 1: Healthy Database**
+```rust
+let health = db.health();
+assert_eq!(health.status, HealthStatus::Healthy);
+assert!(health.warnings.is_empty());
+assert!(health.errors.is_empty());
+```
+
+**Example 2: Degraded Database**
+```rust
+let health = db.health();
+if health.status == HealthStatus::Degraded {
+    // Example warnings:
+    // - "High SST count in stripe 42 (15 files)"
+    // - "Compaction falling behind in 3 stripes"
+    // - "Disk usage above 80%"
+}
+```
+
+**Example 3: Unhealthy Database**
+```rust
+let health = db.health();
+if health.status == HealthStatus::Unhealthy {
+    // Example errors:
+    // - "Database directory not accessible"
+    // - "Corruption detected in WAL"
+    // - "Unable to write to disk (space full)"
+
+    // Log error and alert
+    for error in &health.errors {
+        log::error!("Database error: {}", error);
+    }
+}
+```
+
+### Monitoring Integration
+
+**Periodic health checks:**
+```rust
+use std::time::Duration;
+use std::thread;
+
+loop {
+    let health = db.health();
+
+    if health.status != HealthStatus::Healthy {
+        // Send alert
+        send_alert(&health);
+    }
+
+    thread::sleep(Duration::from_secs(60));
+}
+```
+
+**Expose health via HTTP:**
+```rust
+use actix_web::{web, App, HttpResponse, HttpServer};
+
+async fn health_check(db: web::Data<Database>) -> HttpResponse {
+    let health = db.health();
+
+    match health.status {
+        HealthStatus::Healthy => HttpResponse::Ok().json(health),
+        HealthStatus::Degraded => HttpResponse::Ok().json(health),
+        HealthStatus::Unhealthy => HttpResponse::ServiceUnavailable().json(health),
+    }
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    let db = Database::open("/data/mydb.keystone").unwrap();
+
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(db.clone()))
+            .route("/health", web::get().to(health_check))
+    })
+    .bind("0.0.0.0:8080")?
+    .run()
+    .await
+}
+```
+
+**Kubernetes liveness probe:**
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 30
+```
 
 ## Structured Logging
 

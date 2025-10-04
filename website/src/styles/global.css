@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-text-base: 15 23 42;
+    --color-text-muted: 100 116 139;
+    --color-bg-base: 255 255 255;
+    --color-bg-muted: 248 250 252;
+    --color-border: 226 232 240;
+  }
+
+  :root.dark {
+    --color-text-base: 248 250 252;
+    --color-text-muted: 148 163 184;
+    --color-bg-base: 15 23 42;
+    --color-bg-muted: 30 41 59;
+    --color-border: 51 65 85;
+  }
+
+  * {
+    @apply border-slate-200 dark:border-slate-700;
+  }
+
+  body {
+    @apply bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-bold text-slate-900 dark:text-slate-100;
+  }
+
+  a {
+    @apply text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors;
+  }
+
+  code:not(pre code) {
+    @apply px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-sm font-mono text-accent-600 dark:text-accent-400;
+  }
+
+  pre {
+    @apply rounded-lg p-4 overflow-x-auto my-4 bg-slate-900 dark:bg-slate-950;
+  }
+
+  pre code {
+    @apply text-sm font-mono;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-6 py-3 rounded-lg font-semibold transition-all duration-200 inline-flex items-center gap-2;
+  }
+
+  .btn-primary {
+    @apply bg-primary-600 hover:bg-primary-700 text-white shadow-lg hover:shadow-xl transform hover:-translate-y-0.5;
+  }
+
+  .btn-secondary {
+    @apply bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-900 dark:text-slate-100;
+  }
+
+  .btn-outline {
+    @apply border-2 border-primary-600 text-primary-600 hover:bg-primary-50 dark:border-primary-400 dark:text-primary-400 dark:hover:bg-primary-950;
+  }
+
+  .card {
+    @apply bg-white dark:bg-slate-800 rounded-xl p-6 shadow-lg border border-slate-200 dark:border-slate-700;
+  }
+
+  .nav-link {
+    @apply px-4 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors;
+  }
+
+  .prose-custom {
+    @apply prose prose-slate dark:prose-invert max-w-none;
+    @apply prose-headings:font-bold prose-headings:text-slate-900 dark:prose-headings:text-slate-100;
+    @apply prose-a:text-primary-600 dark:prose-a:text-primary-400 prose-a:no-underline hover:prose-a:underline;
+    @apply prose-code:text-accent-600 dark:prose-code:text-accent-400 prose-code:font-mono;
+    @apply prose-pre:bg-slate-900 dark:prose-pre:bg-slate-950;
+  }
+}

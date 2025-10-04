@@ -1,0 +1,192 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import Hero from '../components/Hero.astro';
+import FeatureCard from '../components/FeatureCard.astro';
+import { Database, Zap, Shield, Code, GitBranch, Boxes } from 'lucide-react';
+
+const features = [
+  {
+    title: 'DynamoDB-Compatible API',
+    description: 'Familiar DynamoDB operations: Put, Get, Delete, Query, Scan, Batch, and Transactions with full ACID guarantees.',
+    icon: '<svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>',
+  },
+  {
+    title: 'Lightning Fast',
+    description: '50K writes/sec and 100K+ reads/sec. LSM tree with 256 stripes, bloom filters, and automatic compaction.',
+    icon: '<svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+  },
+  {
+    title: 'ACID Compliant',
+    description: 'Write-ahead log ensures durability. Transactions provide atomicity and isolation. Crash recovery is automatic.',
+    icon: '<svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>',
+  },
+  {
+    title: 'PartiQL Support',
+    description: 'SQL-like query language with SELECT, INSERT, UPDATE, DELETE. Full WHERE clause support and index queries.',
+    icon: '<svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>',
+  },
+  {
+    title: 'Secondary Indexes',
+    description: 'Local and Global Secondary Indexes for efficient queries. Support for multiple access patterns and projections.',
+    icon: '<svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>',
+  },
+  {
+    title: 'Embedded & Remote',
+    description: 'Use as embedded library or connect via gRPC. Perfect for desktop apps, mobile, edge computing, or distributed systems.',
+    icon: '<svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>',
+  },
+];
+
+const comparisons = [
+  { feature: 'API', keystonedb: 'DynamoDB-compatible', dynamodb: 'Native', sqlite: 'SQL', rocksdb: 'Key-Value' },
+  { feature: 'Deployment', keystonedb: 'Embedded/Remote', dynamodb: 'Cloud only', sqlite: 'Embedded', rocksdb: 'Embedded' },
+  { feature: 'Indexes', keystonedb: 'LSI + GSI', dynamodb: 'LSI + GSI', sqlite: 'B-tree', rocksdb: 'None' },
+  { feature: 'Transactions', keystonedb: 'ACID', dynamodb: 'ACID', sqlite: 'ACID', rocksdb: 'Optional' },
+  { feature: 'Cost', keystonedb: 'Free (OSS)', dynamodb: 'Pay per use', sqlite: 'Free', rocksdb: 'Free' },
+];
+---
+
+<BaseLayout title="KeystoneDB - DynamoDB-Style Embedded Database">
+  <Header />
+
+  <main>
+    <Hero />
+
+    <!-- Features Section -->
+    <section id="features" class="py-20 bg-white dark:bg-slate-900">
+      <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+          <h2 class="text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white mb-4">
+            Everything You Need
+          </h2>
+          <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+            Production-ready features for building modern data-intensive applications
+          </p>
+        </div>
+
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {features.map((feature) => (
+            <FeatureCard
+              title={feature.title}
+              description={feature.description}
+              icon={feature.icon}
+            />
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <!-- Comparison Section -->
+    <section class="py-20 bg-slate-50 dark:bg-slate-800">
+      <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+          <h2 class="text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white mb-4">
+            How KeystoneDB Compares
+          </h2>
+          <p class="text-xl text-slate-600 dark:text-slate-300">
+            Best of both worlds: DynamoDB API with local-first deployment
+          </p>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full bg-white dark:bg-slate-900 rounded-xl shadow-lg">
+            <thead>
+              <tr class="border-b border-slate-200 dark:border-slate-700">
+                <th class="px-6 py-4 text-left text-slate-900 dark:text-white font-semibold">Feature</th>
+                <th class="px-6 py-4 text-left text-primary-600 dark:text-primary-400 font-semibold">KeystoneDB</th>
+                <th class="px-6 py-4 text-left text-slate-600 dark:text-slate-400">DynamoDB</th>
+                <th class="px-6 py-4 text-left text-slate-600 dark:text-slate-400">SQLite</th>
+                <th class="px-6 py-4 text-left text-slate-600 dark:text-slate-400">RocksDB</th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparisons.map((row, i) => (
+                <tr class={i !== comparisons.length - 1 ? 'border-b border-slate-200 dark:border-slate-700' : ''}>
+                  <td class="px-6 py-4 font-medium text-slate-900 dark:text-white">{row.feature}</td>
+                  <td class="px-6 py-4 text-primary-600 dark:text-primary-400 font-semibold">{row.keystonedb}</td>
+                  <td class="px-6 py-4 text-slate-600 dark:text-slate-400">{row.dynamodb}</td>
+                  <td class="px-6 py-4 text-slate-600 dark:text-slate-400">{row.sqlite}</td>
+                  <td class="px-6 py-4 text-slate-600 dark:text-slate-400">{row.rocksdb}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Use Cases Section -->
+    <section class="py-20 bg-white dark:bg-slate-900">
+      <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="text-center mb-16">
+          <h2 class="text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white mb-4">
+            Perfect For
+          </h2>
+        </div>
+
+        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <div class="card">
+            <h3 class="text-xl font-bold mb-2">Desktop Applications</h3>
+            <p class="text-slate-600 dark:text-slate-300">
+              Single-file database perfect for Electron, Tauri, or native desktop apps. No server required.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="text-xl font-bold mb-2">Offline-First Mobile</h3>
+            <p class="text-slate-600 dark:text-slate-300">
+              Local storage with DynamoDB API. Sync to cloud when online. Works great with React Native.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="text-xl font-bold mb-2">Edge Computing</h3>
+            <p class="text-slate-600 dark:text-slate-300">
+              Deploy databases at the edge. Low latency, high performance, minimal resource usage.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="text-xl font-bold mb-2">Development & Testing</h3>
+            <p class="text-slate-600 dark:text-slate-300">
+              DynamoDB-compatible local development without AWS. Perfect for unit tests and CI/CD.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="text-xl font-bold mb-2">Session Storage</h3>
+            <p class="text-slate-600 dark:text-slate-300">
+              Fast session management with TTL support. Built-in expiration and automatic cleanup.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="text-xl font-bold mb-2">IoT Devices</h3>
+            <p class="text-slate-600 dark:text-slate-300">
+              Lightweight database for constrained environments. Crash recovery and durability built-in.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="py-20 bg-gradient-to-r from-primary-600 to-accent-600 dark:from-primary-800 dark:to-accent-800">
+      <div class="container mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <h2 class="text-3xl sm:text-4xl font-bold text-white mb-4">
+          Ready to Get Started?
+        </h2>
+        <p class="text-xl text-white/90 mb-8 max-w-2xl mx-auto">
+          Build your first KeystoneDB application in minutes. Full documentation and examples included.
+        </p>
+        <div class="flex flex-wrap justify-center gap-4">
+          <a href="/docs" class="btn bg-white text-primary-600 hover:bg-gray-100">
+            Read the Docs
+          </a>
+          <a href="/examples" class="btn bg-white/10 text-white border-2 border-white hover:bg-white/20">
+            View Examples
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <Footer />
+</BaseLayout>
