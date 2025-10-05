@@ -1,0 +1,14 @@
+[package]
+name = "s3-backup-example"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "s3-backup"
+path = "main.rs"
+
+[dependencies]
+kstone-api = { path = "../../kstone-api" }
+kstone-sync = { path = "../../kstone-sync", features = ["s3-sync"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"

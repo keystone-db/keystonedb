@@ -15,6 +15,13 @@ use crate::{
     change_tracker::SyncRecord as TrackedRecord,
 };
 
+/// Filesystem protocol implementation
+pub mod filesystem;
+
+/// S3 protocol implementation
+#[cfg(feature = "s3-sync")]
+pub mod s3;
+
 /// Sync endpoint configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SyncEndpoint {
@@ -38,6 +45,14 @@ pub enum SyncEndpoint {
     FileSystem {
         path: String,
     },
+    /// S3-compatible object storage
+    S3 {
+        bucket: String,
+        prefix: String,
+        region: String,
+        endpoint_url: Option<String>, // For S3-compatible stores like MinIO
+        credentials: Option<AwsCredentials>,
+    },
 }
 
 impl SyncEndpoint {
@@ -56,6 +71,9 @@ impl SyncEndpoint {
             Self::FileSystem { path } => {
                 format!("file:{}", path)
             }
+            Self::S3 { bucket, prefix, .. } => {
+                format!("s3://{}:{}", bucket, prefix)
+            }
         };
         EndpointId::from_str(&id_str)
     }
@@ -67,6 +85,7 @@ impl SyncEndpoint {
             Self::Http { .. } => "http",
             Self::Keystone { .. } => "keystone",
             Self::FileSystem { .. } => "filesystem",
+            Self::S3 { .. } => "s3",
         }
     }
 }

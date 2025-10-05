@@ -279,6 +279,14 @@ impl Database {
         }
     }
 
+    /// Get the database path (only for disk-based databases)
+    pub fn path(&self) -> Option<&Path> {
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.path(),
+            DatabaseEngine::Memory(_) => None,
+        }
+    }
+
     /// Flush any pending writes
     pub fn flush(&self) -> Result<()> {
         match &self.engine {

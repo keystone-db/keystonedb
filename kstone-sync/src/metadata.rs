@@ -7,6 +7,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use kstone_api::{Database, ItemBuilder, KeystoneValue as Value};
 use kstone_core::{Item, Key};
@@ -144,13 +145,13 @@ pub struct SyncCheckpoint {
 }
 
 /// Storage operations for sync metadata
-pub struct SyncMetadataStore<'a> {
-    db: &'a Database,
+pub struct SyncMetadataStore {
+    db: Arc<Database>,
 }
 
-impl<'a> SyncMetadataStore<'a> {
+impl SyncMetadataStore {
     /// Create a new metadata store
-    pub fn new(db: &'a Database) -> Self {
+    pub fn new(db: Arc<Database>) -> Self {
         Self { db }
     }
 

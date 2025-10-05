@@ -30,7 +30,9 @@ pub use protocol::{SyncProtocol, SyncEndpoint};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
+use kstone_api::Database;
 
 /// Unique identifier for a sync endpoint
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,6 +84,7 @@ pub struct SyncStats {
 
 /// Builder for creating a cloud sync configuration
 pub struct CloudSyncBuilder {
+    db: Option<Arc<Database>>,
     endpoint: Option<SyncEndpoint>,
     conflict_strategy: ConflictStrategy,
     sync_interval: Option<std::time::Duration>,
@@ -93,6 +96,7 @@ pub struct CloudSyncBuilder {
 impl CloudSyncBuilder {
     pub fn new() -> Self {
         Self {
+            db: None,
             endpoint: None,
             conflict_strategy: ConflictStrategy::LastWriterWins,
             sync_interval: Some(std::time::Duration::from_secs(30)),
@@ -100,6 +104,11 @@ impl CloudSyncBuilder {
             max_retries: 3,
             enable_compression: true,
         }
+    }
+
+    pub fn with_database(mut self, db: Arc<Database>) -> Self {
+        self.db = Some(db);
+        self
     }
 
     pub fn with_endpoint(mut self, endpoint: SyncEndpoint) -> Self {
@@ -133,6 +142,10 @@ impl CloudSyncBuilder {
     }
 
     pub fn build(self) -> Result<SyncEngine> {
+        let db = self.db.ok_or_else(|| {
+            anyhow::anyhow!("Database is required")
+        })?;
+
         let endpoint = self.endpoint.ok_or_else(|| {
             anyhow::anyhow!("Sync endpoint is required")
         })?;
@@ -146,7 +159,7 @@ impl CloudSyncBuilder {
             enable_compression: self.enable_compression,
         };
 
-        SyncEngine::new(config)
+        SyncEngine::new(db, config)
     }
 }
 

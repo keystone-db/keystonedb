@@ -1129,6 +1129,13 @@ impl LsmEngine {
         Ok(())
     }
 
+    /// Get the database directory path
+    pub fn path(&self) -> Option<&Path> {
+        // Since inner is behind RwLock, we can't easily return a reference to the path
+        // This would require refactoring to store the path at the engine level
+        None
+    }
+
     /// Force flush all stripes (for testing/shutdown)
     pub fn flush(&self) -> Result<()> {
         let mut inner = self.inner.write();

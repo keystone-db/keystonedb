@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use kstone_api::{Database, KeystoneValue, ExecuteStatementResponse};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 mod shell;
 mod table;
@@ -307,7 +308,7 @@ fn handle_sync_command(command: SyncCommands) -> Result<()> {
             let db = Database::open(&path).context("Failed to open database")?;
 
             // Initialize sync metadata
-            let metadata_store = SyncMetadataStore::new(&db);
+            let metadata_store = SyncMetadataStore::new(Arc::new(db));
             metadata_store.initialize().context("Failed to initialize sync metadata")?;
 
             println!("✓ Sync metadata initialized for database: {}", path.display());
@@ -321,7 +322,7 @@ fn handle_sync_command(command: SyncCommands) -> Result<()> {
             table,
         } => {
             let db = Database::open(&path).context("Failed to open database")?;
-            let metadata_store = SyncMetadataStore::new(&db);
+            let metadata_store = SyncMetadataStore::new(Arc::new(db));
 
             // Create endpoint based on type
             let endpoint = match endpoint_type.as_str() {
@@ -458,7 +459,7 @@ fn handle_sync_command(command: SyncCommands) -> Result<()> {
 
         SyncCommands::Status { path } => {
             let db = Database::open(&path).context("Failed to open database")?;
-            let metadata_store = SyncMetadataStore::new(&db);
+            let metadata_store = SyncMetadataStore::new(Arc::new(db));
 
             // Load metadata
             let metadata = metadata_store
@@ -502,7 +503,7 @@ fn handle_sync_command(command: SyncCommands) -> Result<()> {
 
         SyncCommands::History { path, limit } => {
             let db = Database::open(&path).context("Failed to open database")?;
-            let metadata_store = SyncMetadataStore::new(&db);
+            let metadata_store = SyncMetadataStore::new(Arc::new(db));
 
             // Load metadata
             let metadata = metadata_store
