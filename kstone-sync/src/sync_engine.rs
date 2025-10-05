@@ -124,7 +124,7 @@ pub struct SyncEngine {
     /// Offline queue
     offline_queue: Arc<OfflineQueue>,
     /// Metadata store
-    metadata_store: Arc<SyncMetadataStore<'static>>,
+    metadata_store: Arc<SyncMetadataStore>,
     /// Sync metadata
     metadata: Arc<RwLock<SyncMetadata>>,
     /// Event channel sender
@@ -137,23 +137,28 @@ pub struct SyncEngine {
 
 impl SyncEngine {
     /// Create a new sync engine
-    pub fn new(config: SyncConfig) -> Result<Self> {
+    pub fn new(db: Arc<Database>, config: SyncConfig) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        // This is a simplified constructor - in production, these would be passed in
-        let db = Arc::new(Database::create_in_memory()?);
         let local_endpoint = EndpointId::new();
 
         let change_tracker = Arc::new(ChangeTracker::new(local_endpoint.clone(), 10000));
         let conflict_manager = Arc::new(ConflictManager::new(config.conflict_strategy.clone()));
         let offline_queue = Arc::new(OfflineQueue::new(RetryPolicy::default(), 1000));
 
-        // Note: This is a hack for the lifetime - in production we'd handle this better
-        let metadata_store: Arc<SyncMetadataStore<'static>> = unsafe {
-            Arc::new(std::mem::transmute(SyncMetadataStore::new(&*db)))
-        };
+        let metadata_store = Arc::new(SyncMetadataStore::new(db.clone()));
 
-        let metadata = Arc::new(RwLock::new(SyncMetadata::new(local_endpoint)));
+        // Initialize metadata if not exists
+        metadata_store.initialize()?;
+
+        let metadata = match metadata_store.load_metadata()? {
+            Some(existing) => Arc::new(RwLock::new(existing)),
+            None => {
+                let new_metadata = SyncMetadata::new(local_endpoint.clone());
+                metadata_store.save_metadata(&new_metadata)?;
+                Arc::new(RwLock::new(new_metadata))
+            }
+        };
 
         Ok(Self {
             db,
@@ -208,6 +213,92 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// Perform a single sync operation with a specific endpoint
+    pub async fn sync(&self, endpoint: SyncEndpoint) -> Result<SyncSessionStats> {
+        // Temporarily use the provided endpoint for this sync
+        let mut protocol = self.create_protocol_for_endpoint(&endpoint).await?;
+
+        self.set_state(SyncState::Connecting);
+        self.emit_event(SyncEvent::Started {
+            endpoint_id: endpoint.endpoint_id(),
+        });
+
+        // Connect to endpoint
+        protocol.connect().await?;
+        self.set_state(SyncState::Handshaking);
+
+        // Perform handshake
+        let metadata = self.metadata.read().clone();
+        let remote_clock = protocol.handshake(
+            &metadata.local_endpoint,
+            &metadata.vector_clock,
+        ).await?;
+
+        // Update vector clock
+        self.change_tracker.update_vector_clock(&remote_clock);
+
+        // Discovery phase
+        self.set_state(SyncState::Discovering);
+        let changes = self.discover_changes(protocol.as_mut()).await?;
+
+        let total_changes = changes.len();
+
+        // Debug: Log discovered changes
+        eprintln!("DEBUG: Discovered {} changes", total_changes);
+        for (key, diff_type) in &changes {
+            eprintln!("  Key: {:?}, Type: {:?}", String::from_utf8_lossy(&key.pk), diff_type);
+        }
+
+        if total_changes == 0 {
+            self.set_state(SyncState::Completed);
+            let stats = SyncSessionStats::default();
+            self.emit_event(SyncEvent::Completed {
+                stats: stats.clone(),
+            });
+            return Ok(stats);
+        }
+
+        // Transfer phase
+        self.set_state(SyncState::Transferring {
+            sent: 0,
+            received: 0,
+            total: total_changes,
+        });
+
+        let stats = self.transfer_changes(protocol.as_mut(), changes).await?;
+
+        // Conflict resolution
+        if self.conflict_manager.get_stats().pending_count > 0 {
+            self.set_state(SyncState::ResolvingConflicts);
+            self.resolve_conflicts().await?;
+        }
+
+        // Commit phase
+        self.set_state(SyncState::Committing);
+
+        // Disconnect
+        protocol.disconnect().await?;
+
+        // Update metadata
+        let mut metadata = self.metadata.write();
+        metadata.stats.last_sync_time = Some(chrono::Utc::now().timestamp_millis());
+        metadata.stats.successful_syncs += 1;
+        metadata.stats.total_syncs += 1;
+        metadata.stats.items_sent += stats.items_sent as u64;
+        metadata.stats.items_received += stats.items_received as u64;
+        drop(metadata);
+
+        self.metadata_store.save_metadata(&self.metadata.read())?;
+        self.db.flush()?;
+
+        self.set_state(SyncState::Completed);
+        self.emit_event(SyncEvent::Completed {
+            stats: stats.clone(),
+        });
+
+        Ok(stats)
+    }
+
     /// Perform a single sync operation
     pub async fn sync_once(&self) -> Result<()> {
         self.set_state(SyncState::Connecting);
@@ -237,6 +328,13 @@ impl SyncEngine {
         let changes = self.discover_changes(protocol.as_mut()).await?;
 
         let total_changes = changes.len();
+
+        // Debug: Log discovered changes
+        eprintln!("DEBUG: Discovered {} changes", total_changes);
+        for (key, diff_type) in &changes {
+            eprintln!("  Key: {:?}, Type: {:?}", String::from_utf8_lossy(&key.pk), diff_type);
+        }
+
         if total_changes == 0 {
             self.set_state(SyncState::Completed);
             self.emit_event(SyncEvent::Completed {
@@ -274,6 +372,9 @@ impl SyncEngine {
             metadata.stats.total_syncs += 1;
             metadata.stats.successful_syncs += 1;
             metadata.update_sync_time(&self.config.endpoint.endpoint_id());
+
+            // Save metadata to persist statistics
+            self.metadata_store.save_metadata(&*metadata)?;
         } // Lock dropped here
 
         protocol.disconnect().await?;
@@ -285,9 +386,18 @@ impl SyncEngine {
         &self,
         protocol: &mut dyn SyncProtocol,
     ) -> Result<Vec<(Key, DiffType)>> {
-        // Build local Merkle tree
-        // This is simplified - in production would scan the database
-        let local_items = vec![]; // Would get from database
+        // Build local Merkle tree by scanning the database with keys
+        let mut local_items = Vec::new();
+
+        // Scan the database to get items with their keys
+        let records = self.db.scan_with_keys(Some(10000))?;
+
+        for (key, item) in records {
+            let key_bytes = key.encode();
+            let value_bytes = serde_json::to_vec(&item)?;
+            local_items.push((key_bytes, Bytes::from(value_bytes)));
+        }
+
         let local_tree = MerkleTree::build(local_items, 16)?;
 
         if let Some(root) = local_tree.root.as_ref() {
@@ -316,7 +426,13 @@ impl SyncEngine {
                 match diff_type {
                     DiffType::LocalOnly => {
                         // We have it, they don't - push
-                        if let Some(item) = self.db.get(&key.encode())? {
+                        let item = if let Some(ref sk) = key.sk {
+                            self.db.get_with_sk(&key.pk, sk)?
+                        } else {
+                            self.db.get(&key.pk)?
+                        };
+
+                        if let Some(item) = item {
                             to_push.push((
                                 key.clone(),
                                 Some(item),
@@ -331,7 +447,14 @@ impl SyncEngine {
                     DiffType::Modified => {
                         // Both have it but different - need to resolve
                         to_pull.push(key.clone());
-                        if let Some(item) = self.db.get(&key.encode())? {
+
+                        let item = if let Some(ref sk) = key.sk {
+                            self.db.get_with_sk(&key.pk, sk)?
+                        } else {
+                            self.db.get(&key.pk)?
+                        };
+
+                        if let Some(item) = item {
                             to_push.push((
                                 key.clone(),
                                 Some(item),
@@ -385,7 +508,13 @@ impl SyncEngine {
         remote_item: Option<Item>,
         remote_clock: VectorClock,
     ) -> Result<()> {
-        let local_item = self.db.get(&key.encode())?;
+        // Get the local item using the correct method
+        let local_item = if let Some(ref sk) = key.sk {
+            self.db.get_with_sk(&key.pk, sk)?
+        } else {
+            self.db.get(&key.pk)?
+        };
+
         let local_clock = self.change_tracker.get_vector_clock();
 
         // Check for conflict
@@ -410,8 +539,20 @@ impl SyncEngine {
         } else {
             // No conflict, apply remote change
             match remote_item {
-                Some(item) => self.db.put(&key.encode(), item)?,
-                None => self.db.delete(&key.encode())?,
+                Some(item) => {
+                    if let Some(ref sk) = key.sk {
+                        self.db.put_with_sk(&key.pk, sk, item)?
+                    } else {
+                        self.db.put(&key.pk, item)?
+                    }
+                }
+                None => {
+                    if let Some(ref sk) = key.sk {
+                        self.db.delete_with_sk(&key.pk, sk)?
+                    } else {
+                        self.db.delete(&key.pk)?
+                    }
+                }
             }
         }
 
@@ -456,6 +597,31 @@ impl SyncEngine {
     }
 
     /// Create protocol handler for the configured endpoint
+    async fn create_protocol_for_endpoint(&self, endpoint: &SyncEndpoint) -> Result<Box<dyn SyncProtocol>> {
+        match endpoint {
+            SyncEndpoint::DynamoDB { .. } => {
+                #[cfg(feature = "dynamodb")]
+                {
+                    // Would create DynamoDB protocol
+                    Ok(Box::new(crate::protocol::MockSyncProtocol::new()))
+                }
+                #[cfg(not(feature = "dynamodb"))]
+                {
+                    Err(anyhow::anyhow!("DynamoDB support not enabled"))
+                }
+            }
+            SyncEndpoint::FileSystem { path } => {
+                // Use filesystem protocol for local database sync
+                let protocol = crate::protocol::filesystem::FilesystemProtocol::new(path.clone())
+                    .with_local_db(self.db.clone());
+                Ok(Box::new(protocol))
+            }
+            _ => {
+                Err(anyhow::anyhow!("Unsupported sync endpoint type"))
+            }
+        }
+    }
+
     async fn create_protocol(&self) -> Result<Box<dyn SyncProtocol>> {
         match &self.config.endpoint {
             SyncEndpoint::DynamoDB { .. } => {
@@ -469,8 +635,14 @@ impl SyncEngine {
                     Err(anyhow::anyhow!("DynamoDB support not enabled"))
                 }
             }
+            SyncEndpoint::FileSystem { path } => {
+                // Use filesystem protocol for local database sync
+                let protocol = crate::protocol::filesystem::FilesystemProtocol::new(path.clone())
+                    .with_local_db(self.db.clone());
+                Ok(Box::new(protocol))
+            }
             _ => {
-                // Use mock for now
+                // Use mock for other protocols (HTTP, Keystone)
                 Ok(Box::new(crate::protocol::MockSyncProtocol::new()))
             }
         }
@@ -537,6 +709,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_engine_creation() {
+        let db = Arc::new(kstone_api::Database::create_in_memory().unwrap());
+
         let config = SyncConfig {
             endpoint: SyncEndpoint::FileSystem {
                 path: "/tmp/test".to_string(),
@@ -548,12 +722,14 @@ mod tests {
             enable_compression: false,
         };
 
-        let engine = SyncEngine::new(config).unwrap();
+        let engine = SyncEngine::new(db, config).unwrap();
         assert_eq!(engine.get_state(), SyncState::Idle);
     }
 
     #[tokio::test]
     async fn test_sync_state_transitions() {
+        let db = Arc::new(kstone_api::Database::create_in_memory().unwrap());
+
         let config = SyncConfig {
             endpoint: SyncEndpoint::FileSystem {
                 path: "/tmp/test".to_string(),
@@ -565,7 +741,7 @@ mod tests {
             enable_compression: false,
         };
 
-        let engine = SyncEngine::new(config).unwrap();
+        let engine = SyncEngine::new(db, config).unwrap();
 
         engine.set_state(SyncState::Connecting);
         assert_eq!(engine.get_state(), SyncState::Connecting);

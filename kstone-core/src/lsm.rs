@@ -802,6 +802,52 @@ impl LsmEngine {
         Ok(committed)
     }
 
+    /// Scan with keys - returns (Key, Item) pairs for sync
+    pub fn scan_with_keys(&self, limit: usize) -> Result<Vec<(Key, Item)>> {
+        let inner = self.inner.read();
+        let mut results = Vec::new();
+        let mut count = 0;
+
+        // Scan all stripes
+        for stripe in &inner.stripes {
+            // From memtable
+            for (_key_bytes, record) in &stripe.memtable {
+                if let Some(ref item) = record.value {
+                    // Skip index records (start with 0xFF) and sync metadata
+                    if !record.key.pk.starts_with(&[0xFF]) &&
+                       !record.key.pk.starts_with(b"_sync#") {
+                        results.push((record.key.clone(), item.clone()));
+                        count += 1;
+                        if count >= limit {
+                            return Ok(results);
+                        }
+                    }
+                }
+            }
+
+            // From SSTs
+            for sst in &stripe.ssts {
+                if let Ok(records) = sst.scan() {
+                    for record in records {
+                        if let Some(ref item) = record.value {
+                            // Skip index records (start with 0xFF) and sync metadata
+                            if !record.key.pk.starts_with(&[0xFF]) &&
+                               !record.key.pk.starts_with(b"_sync#") {
+                                results.push((record.key.clone(), item.clone()));
+                                count += 1;
+                                if count >= limit {
+                                    return Ok(results);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Scan all items across all stripes (Phase 2.2+)
     pub fn scan(&self, params: ScanParams) -> Result<ScanResult> {
         let inner = self.inner.read();

@@ -12,8 +12,10 @@ path = "src/lib.rs"
 [dependencies]
 kstone-api = { path = "../kstone-api" }
 kstone-core = { path = "../kstone-core" }
+kstone-sync = { path = "../kstone-sync" }
 tempfile.workspace = true
 anyhow.workspace = true
+tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 criterion.workspace = true
