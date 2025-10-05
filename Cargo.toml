@@ -6,11 +6,17 @@ members = [
     "kstone-proto",
     "kstone-server",
     "kstone-client",
+    "kstone-sync",
     "kstone-tests",
+    "c-ffi",
     "examples/url-shortener",
     "examples/cache-server",
     "examples/todo-api",
     "examples/blog-engine",
+]
+exclude = [
+    "bindings/python/embedded",
+    "bindings/javascript/embedded",
 ]
 resolver = "2"
 

@@ -12,12 +12,25 @@ path = "src/main.rs"
 [dependencies]
 kstone-api = { path = "../kstone-api", version = "0.1.0" }
 kstone-core = { path = "../kstone-core", version = "0.1.0" }
+kstone-sync = { path = "../kstone-sync", version = "0.1.0" }
 anyhow.workspace = true
 clap.workspace = true
 comfy-table.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 rustyline = "14.0"
 colored = "2.0"
 dirs = "5.0"
+
+# Notebook dependencies
+tokio = { workspace = true, features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+rust-embed = { version = "8.0", features = ["debug-embed"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+futures = "0.3"

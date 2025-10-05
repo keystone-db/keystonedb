@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 mod shell;
 mod table;
+mod notebook;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum OutputFormat {
@@ -74,6 +75,79 @@ enum Commands {
     Shell {
         /// Database file path (optional, defaults to :memory:)
         path: Option<PathBuf>,
+    },
+    /// Launch notebook interface
+    Notebook {
+        /// Database file path
+        path: PathBuf,
+        /// Port to serve on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+        /// Host to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Don't automatically open browser
+        #[arg(long)]
+        no_browser: bool,
+    },
+    /// Cloud sync operations
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SyncCommands {
+    /// Initialize sync metadata
+    Init {
+        /// Database file path
+        path: PathBuf,
+    },
+    /// Add a sync endpoint
+    AddEndpoint {
+        /// Database file path
+        path: PathBuf,
+        /// Endpoint type (dynamodb, http, keystone, filesystem)
+        #[arg(short = 't', long)]
+        endpoint_type: String,
+        /// Endpoint URL or path
+        url: String,
+        /// AWS region (for DynamoDB)
+        #[arg(long)]
+        region: Option<String>,
+        /// Table name (for DynamoDB)
+        #[arg(long)]
+        table: Option<String>,
+    },
+    /// Start a sync operation
+    Start {
+        /// Database file path
+        path: PathBuf,
+        /// Endpoint URL to sync with
+        endpoint: String,
+        /// Conflict resolution strategy (last-writer-wins, first-writer-wins, vector-clock, manual)
+        #[arg(short = 's', long, default_value = "last-writer-wins")]
+        strategy: String,
+        /// Enable continuous sync
+        #[arg(long)]
+        continuous: bool,
+        /// Sync interval in seconds (for continuous sync)
+        #[arg(long, default_value = "30")]
+        interval: u64,
+    },
+    /// Check sync status
+    Status {
+        /// Database file path
+        path: PathBuf,
+    },
+    /// Show sync history
+    History {
+        /// Database file path
+        path: PathBuf,
+        /// Number of entries to show
+        #[arg(short = 'n', long, default_value = "10")]
+        limit: usize,
     },
 }
 
@@ -198,6 +272,259 @@ fn main() -> Result<()> {
         Commands::Shell { path } => {
             let mut shell = shell::Shell::new(path.as_deref())?;
             shell.run()?;
+        }
+
+        Commands::Notebook { path, port, host, no_browser } => {
+            let config = notebook::NotebookConfig {
+                host,
+                port,
+                read_only: false,
+                auto_open_browser: !no_browser,
+            };
+
+            // Use tokio runtime for the notebook server
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(notebook::launch_notebook(&path, config))?;
+        }
+
+        Commands::Sync { command } => {
+            handle_sync_command(command)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_sync_command(command: SyncCommands) -> Result<()> {
+    use kstone_sync::{
+        CloudSyncBuilder, SyncEndpoint, ConflictStrategy,
+        SyncMetadataStore, EndpointInfo,
+    };
+    use std::time::Duration;
+
+    match command {
+        SyncCommands::Init { path } => {
+            let db = Database::open(&path).context("Failed to open database")?;
+
+            // Initialize sync metadata
+            let metadata_store = SyncMetadataStore::new(&db);
+            metadata_store.initialize().context("Failed to initialize sync metadata")?;
+
+            println!("✓ Sync metadata initialized for database: {}", path.display());
+        }
+
+        SyncCommands::AddEndpoint {
+            path,
+            endpoint_type,
+            url,
+            region,
+            table,
+        } => {
+            let db = Database::open(&path).context("Failed to open database")?;
+            let metadata_store = SyncMetadataStore::new(&db);
+
+            // Create endpoint based on type
+            let endpoint = match endpoint_type.as_str() {
+                "dynamodb" => {
+                    let region = region.ok_or_else(|| anyhow::anyhow!("Region required for DynamoDB endpoint"))?;
+                    let table = table.ok_or_else(|| anyhow::anyhow!("Table name required for DynamoDB endpoint"))?;
+                    SyncEndpoint::DynamoDB {
+                        region,
+                        table_name: table,
+                        credentials: None, // Will use default AWS credentials
+                    }
+                }
+                "http" => SyncEndpoint::Http {
+                    url: url.clone(),
+                    auth: None,
+                },
+                "keystone" => SyncEndpoint::Keystone {
+                    url: url.clone(),
+                    auth_token: None,
+                },
+                "filesystem" => SyncEndpoint::FileSystem {
+                    path: url.clone(),
+                },
+                _ => return Err(anyhow::anyhow!("Unknown endpoint type: {}", endpoint_type)),
+            };
+
+            // Load existing metadata
+            let mut metadata = metadata_store
+                .load_metadata()?
+                .ok_or_else(|| anyhow::anyhow!("Sync metadata not initialized. Run 'sync init' first."))?;
+
+            // Add endpoint
+            let endpoint_info = EndpointInfo {
+                id: endpoint.endpoint_id(),
+                url: url.clone(),
+                endpoint_type: endpoint.endpoint_type().to_string(),
+                active: true,
+                last_clock: None,
+            };
+
+            metadata.add_endpoint(endpoint_info.clone());
+            metadata_store.save_metadata(&metadata)?;
+            metadata_store.save_endpoint(&endpoint_info)?;
+
+            println!("✓ Added {} endpoint: {}", endpoint_type, url);
+        }
+
+        SyncCommands::Start {
+            path,
+            endpoint,
+            strategy,
+            continuous,
+            interval,
+        } => {
+            let _db = Database::open(&path).context("Failed to open database")?;
+
+            // Parse conflict strategy
+            let conflict_strategy = match strategy.as_str() {
+                "last-writer-wins" => ConflictStrategy::LastWriterWins,
+                "first-writer-wins" => ConflictStrategy::FirstWriterWins,
+                "vector-clock" => ConflictStrategy::VectorClock,
+                "manual" => ConflictStrategy::Manual,
+                _ => return Err(anyhow::anyhow!("Unknown conflict strategy: {}", strategy)),
+            };
+
+            // Parse endpoint URL to determine type
+            let sync_endpoint = if endpoint.starts_with("dynamodb://") {
+                // Parse: dynamodb://region/table
+                let parts: Vec<&str> = endpoint.trim_start_matches("dynamodb://").split('/').collect();
+                if parts.len() != 2 {
+                    return Err(anyhow::anyhow!("Invalid DynamoDB URL format. Use: dynamodb://region/table"));
+                }
+                SyncEndpoint::DynamoDB {
+                    region: parts[0].to_string(),
+                    table_name: parts[1].to_string(),
+                    credentials: None,
+                }
+            } else if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+                SyncEndpoint::Http {
+                    url: endpoint.clone(),
+                    auth: None,
+                }
+            } else if endpoint.starts_with("keystone://") {
+                SyncEndpoint::Keystone {
+                    url: endpoint.trim_start_matches("keystone://").to_string(),
+                    auth_token: None,
+                }
+            } else {
+                // Assume filesystem path
+                SyncEndpoint::FileSystem {
+                    path: endpoint.clone(),
+                }
+            };
+
+            // Build sync engine
+            let sync_interval = if continuous {
+                Some(Duration::from_secs(interval))
+            } else {
+                None
+            };
+
+            let mut sync_engine = CloudSyncBuilder::new()
+                .with_endpoint(sync_endpoint)
+                .with_conflict_strategy(conflict_strategy)
+                .with_sync_interval(sync_interval.unwrap_or(Duration::from_secs(30)))
+                .build()
+                .context("Failed to create sync engine")?;
+
+            if continuous {
+                println!("✓ Starting continuous sync with {} (interval: {}s)", endpoint, interval);
+                println!("Press Ctrl+C to stop...");
+
+                // Use tokio runtime for async sync
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(async {
+                    sync_engine.start().await?;
+                    // Keep running until interrupted
+                    tokio::signal::ctrl_c().await?;
+                    sync_engine.stop().await?;
+                    Ok::<(), anyhow::Error>(())
+                })?;
+            } else {
+                println!("✓ Starting one-time sync with {}", endpoint);
+
+                // Use tokio runtime for async sync
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(async {
+                    sync_engine.sync_once().await
+                })?;
+
+                println!("✓ Sync completed successfully");
+            }
+        }
+
+        SyncCommands::Status { path } => {
+            let db = Database::open(&path).context("Failed to open database")?;
+            let metadata_store = SyncMetadataStore::new(&db);
+
+            // Load metadata
+            let metadata = metadata_store
+                .load_metadata()?
+                .ok_or_else(|| anyhow::anyhow!("Sync metadata not initialized"))?;
+
+            println!("Sync Status for: {}", path.display());
+            println!("─────────────────────────────────────────");
+            println!("Local Endpoint: {}", metadata.local_endpoint.0);
+            println!("Remote Endpoints: {}", metadata.remote_endpoints.len());
+
+            for endpoint in &metadata.remote_endpoints {
+                let status = if endpoint.active { "active" } else { "inactive" };
+                println!("  - {} ({}) [{}]", endpoint.url, endpoint.endpoint_type, status);
+
+                if let Some(last_sync) = metadata.get_last_sync_time(&endpoint.id) {
+                    let duration = chrono::Utc::now().timestamp_millis() - last_sync;
+                    let seconds = duration / 1000;
+                    let minutes = seconds / 60;
+                    let hours = minutes / 60;
+
+                    let time_str = if hours > 0 {
+                        format!("{}h ago", hours)
+                    } else if minutes > 0 {
+                        format!("{}m ago", minutes)
+                    } else {
+                        format!("{}s ago", seconds)
+                    };
+
+                    println!("    Last sync: {}", time_str);
+                }
+            }
+
+            println!("\nSync Statistics:");
+            println!("  Total syncs: {}", metadata.stats.total_syncs);
+            println!("  Successful: {}", metadata.stats.successful_syncs);
+            println!("  Failed: {}", metadata.stats.failed_syncs);
+            println!("  Conflicts detected: {}", metadata.stats.conflicts_detected);
+            println!("  Conflicts resolved: {}", metadata.stats.conflicts_resolved);
+        }
+
+        SyncCommands::History { path, limit } => {
+            let db = Database::open(&path).context("Failed to open database")?;
+            let metadata_store = SyncMetadataStore::new(&db);
+
+            // Load metadata
+            let metadata = metadata_store
+                .load_metadata()?
+                .ok_or_else(|| anyhow::anyhow!("Sync metadata not initialized"))?;
+
+            println!("Sync History for: {}", path.display());
+            println!("─────────────────────────────────────────");
+
+            // In a real implementation, we'd store sync history records
+            // For now, just show basic info from metadata
+            println!("Total syncs performed: {}", metadata.stats.total_syncs);
+            println!("Successful syncs: {}", metadata.stats.successful_syncs);
+            println!("Failed syncs: {}", metadata.stats.failed_syncs);
+
+            if metadata.stats.total_syncs > 0 {
+                let success_rate = (metadata.stats.successful_syncs as f64 / metadata.stats.total_syncs as f64) * 100.0;
+                println!("Success rate: {:.1}%", success_rate);
+            }
+
+            println!("\nNote: Detailed sync history will be available in a future version.");
+            println!("Showing last {} entries (when available)", limit);
         }
     }
 

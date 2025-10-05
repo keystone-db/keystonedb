@@ -1,0 +1,46 @@
+[package]
+name = "kstone-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+kstone-core = { path = "../kstone-core", version = "0.1.0" }
+kstone-api = { path = "../kstone-api", version = "0.1.0" }
+
+# Core dependencies
+anyhow.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+# Sync-specific dependencies
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { workspace = true, features = ["full"] }
+async-trait = "0.1"
+
+# AWS SDK for DynamoDB sync
+aws-config = { version = "1.1", optional = true }
+aws-sdk-dynamodb = { version = "1.9", optional = true }
+
+# Networking and compression
+reqwest = { version = "0.11", features = ["json", "gzip"], optional = true }
+zstd = { version = "0.13", optional = true }
+
+# Cryptography for integrity
+sha2 = "0.10"
+hmac = "0.12"
+
+[features]
+default = ["dynamodb", "compression"]
+dynamodb = ["aws-config", "aws-sdk-dynamodb"]
+compression = ["zstd"]
+http-sync = ["reqwest"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio-test = "0.4"
