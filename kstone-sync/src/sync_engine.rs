@@ -435,19 +435,14 @@ impl SyncEngine {
         // Build local Merkle tree by scanning the database with keys
         let mut local_items = Vec::new();
 
-        // TODO: The Database API doesn't provide a way to scan with keys
-        // For now, we'll use a simple scan and reconstruct keys from item attributes
-        // This needs to be properly implemented with either:
-        // 1. A new API method that returns (Key, Item) pairs
-        // 2. Storing keys in items as special attributes
-        use kstone_api::scan::Scan;
-        let scan = Scan::new().limit(10000);
-        let scan_result = self.db.scan(scan)?;
+        // Scan the database to get items with their keys
+        let records = self.db.scan_with_keys(10000)?;
 
-        // For now, skip building the merkle tree since we don't have keys
-        // local_items remains empty
-        // TODO: Implement proper key extraction
-        _ = scan_result; // Suppress unused warning
+        for (key, item) in records {
+            let key_bytes = key.encode();
+            let value_bytes = serde_json::to_vec(&item)?;
+            local_items.push((key_bytes, Bytes::from(value_bytes)));
+        }
 
         let local_tree = MerkleTree::build(local_items, 16)?;
 

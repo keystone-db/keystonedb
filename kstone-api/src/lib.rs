@@ -287,6 +287,17 @@ impl Database {
         }
     }
 
+    /// Scan with keys - returns (Key, Item) pairs for sync
+    pub fn scan_with_keys(&self, limit: usize) -> Result<Vec<(Key, Item)>> {
+        match &self.engine {
+            DatabaseEngine::Disk(e) => e.scan_with_keys(limit),
+            DatabaseEngine::Memory(_) => {
+                // Memory engine doesn't support scan_with_keys yet
+                Ok(Vec::new())
+            }
+        }
+    }
+
     /// Flush any pending writes
     pub fn flush(&self) -> Result<()> {
         match &self.engine {

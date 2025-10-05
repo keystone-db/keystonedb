@@ -17,6 +17,7 @@ const NUM_STRIPES: usize = 256;
 /// LSM engine with 256-way striping (Phase 1.6+)
 pub struct LsmEngine {
     inner: Arc<RwLock<LsmInner>>,
+    path: PathBuf,  // Store path outside the RwLock for easy access
 }
 
 /// A single stripe in the LSM tree
@@ -201,6 +202,7 @@ impl LsmEngine {
                 compaction_stats: CompactionStatsAtomic::new(),
                 config,
             })),
+            path: dir.to_path_buf(),
         })
     }
 
@@ -276,6 +278,7 @@ impl LsmEngine {
                 compaction_stats: CompactionStatsAtomic::new(),
                 config: DatabaseConfig::default(), // TODO: Load from manifest in future
             })),
+            path: dir.to_path_buf(),
         })
     }
 
@@ -1131,9 +1134,7 @@ impl LsmEngine {
 
     /// Get the database directory path
     pub fn path(&self) -> Option<&Path> {
-        // Since inner is behind RwLock, we can't easily return a reference to the path
-        // This would require refactoring to store the path at the engine level
-        None
+        Some(&self.path)
     }
 
     /// Force flush all stripes (for testing/shutdown)
