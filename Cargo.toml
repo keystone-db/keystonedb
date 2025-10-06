@@ -62,6 +62,9 @@ aes-gcm = "0.10"
 # Compression
 zstd = "0.13"
 
+# Validation
+regex = "1.10"
+
 # CLI
 clap = { version = "4.4", features = ["derive"] }
 comfy-table = "7.1"

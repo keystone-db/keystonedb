@@ -258,6 +258,8 @@ impl CompactionManager {
         &self,
         ssts: &[SstReader],
         next_sst_id: u64,
+        compress: bool,
+        compression_level: i32,
     ) -> Result<(SstReader, Vec<PathBuf>)> {
         if ssts.is_empty() {
             return Err(Error::InvalidArgument("Cannot compact zero SSTs".into()));
@@ -292,9 +294,9 @@ impl CompactionManager {
         // Sort by encoded key (already sorted from BTreeMap, but ensure consistency)
         records_to_write.sort_by(|a, b| a.key.encode().cmp(&b.key.encode()));
 
-        // Step 3: Write new SST
+        // Step 3: Write new SST with compression settings
         let new_sst_path = self.dir.join(format!("{:03}-{}.sst", self.stripe_id, next_sst_id));
-        let mut writer = SstWriter::new();
+        let mut writer = SstWriter::with_compression(compress, compression_level);
 
         for record in records_to_write {
             writer.add(record);
@@ -377,7 +379,7 @@ mod tests {
         // Compact
         let sst1 = SstReader::open(&sst1_path).unwrap();
         let sst2 = SstReader::open(&sst2_path).unwrap();
-        let (new_sst, old_paths) = manager.compact(&[sst1, sst2], 3).unwrap();
+        let (new_sst, old_paths) = manager.compact(&[sst1, sst2], 3, false, 3).unwrap();
 
         // Verify: should have 3 keys, with key1 having latest version (v2)
         let records: Vec<Record> = new_sst.scan().unwrap().collect();
@@ -415,7 +417,7 @@ mod tests {
         // Compact
         let sst1 = SstReader::open(&sst1_path).unwrap();
         let sst2 = SstReader::open(&sst2_path).unwrap();
-        let (new_sst, _) = manager.compact(&[sst1, sst2], 3).unwrap();
+        let (new_sst, _) = manager.compact(&[sst1, sst2], 3, false, 3).unwrap();
 
         // Verify: should only have key2 (key1 was deleted)
         let records: Vec<Record> = new_sst.scan().unwrap().collect();
@@ -436,7 +438,7 @@ mod tests {
 
         // Compact
         let sst1 = SstReader::open(&sst1_path).unwrap();
-        let (new_sst, _) = manager.compact(&[sst1], 2).unwrap();
+        let (new_sst, _) = manager.compact(&[sst1], 2, false, 3).unwrap();
 
         // Verify: should be empty (all tombstones filtered)
         let records: Vec<Record> = new_sst.scan().unwrap().collect();
@@ -485,7 +487,7 @@ mod tests {
         // Compact
         let sst1 = SstReader::open(&sst1_path).unwrap();
         let sst2 = SstReader::open(&sst2_path).unwrap();
-        let (new_sst, _) = manager.compact(&[sst1, sst2], 3).unwrap();
+        let (new_sst, _) = manager.compact(&[sst1, sst2], 3, false, 3).unwrap();
 
         // Verify: records should be sorted
         let records: Vec<Record> = new_sst.scan().unwrap().collect();

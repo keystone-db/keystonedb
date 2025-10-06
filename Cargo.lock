@@ -2478,12 +2478,14 @@ dependencies = [
  "memmap2",
  "parking_lot",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "sqlparser",
  "tempfile",
  "thiserror",
  "tracing",
+ "zstd",
 ]
 
 [[package]]

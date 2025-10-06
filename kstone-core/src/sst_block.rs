@@ -32,6 +32,7 @@ const FOOTER_SIZE: usize = 24;
 pub struct SstBlockWriter {
     records: Vec<Record>,
     compress: bool,
+    compression_level: i32,
 }
 
 impl SstBlockWriter {
@@ -39,6 +40,7 @@ impl SstBlockWriter {
         Self {
             records: Vec::new(),
             compress: false,
+            compression_level: 3, // Default level (balanced speed/ratio)
         }
     }
 
@@ -46,6 +48,15 @@ impl SstBlockWriter {
         Self {
             records: Vec::new(),
             compress: true,
+            compression_level: 3, // Default level
+        }
+    }
+
+    pub fn with_compression_level(level: i32) -> Self {
+        Self {
+            records: Vec::new(),
+            compress: true,
+            compression_level: level.clamp(1, 22), // Zstd supports levels 1-22
         }
     }
 
@@ -236,9 +247,31 @@ impl SstBlockWriter {
     }
 
     fn compress_data(&self, data: &Bytes) -> Result<Bytes> {
-        // Compression support will be added with zstd dependency
-        // For now, return uncompressed data
-        Ok(data.clone())
+        use std::io::Write;
+
+        let mut encoder = zstd::Encoder::new(Vec::new(), self.compression_level)
+            .map_err(|e| Error::CompressionError(format!("Failed to create encoder: {}", e)))?;
+
+        encoder.write_all(data)
+            .map_err(|e| Error::CompressionError(format!("Failed to compress: {}", e)))?;
+
+        let compressed = encoder.finish()
+            .map_err(|e| Error::CompressionError(format!("Failed to finish compression: {}", e)))?;
+
+        Ok(Bytes::from(compressed))
+    }
+
+    fn decompress_data(data: &Bytes) -> Result<Bytes> {
+        use std::io::Read;
+
+        let mut decoder = zstd::Decoder::new(data.as_ref())
+            .map_err(|e| Error::CompressionError(format!("Failed to create decoder: {}", e)))?;
+
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed)
+            .map_err(|e| Error::CompressionError(format!("Failed to decompress: {}", e)))?;
+
+        Ok(Bytes::from(decompressed))
     }
 }
 
@@ -257,6 +290,7 @@ pub struct SstBlockReader {
     file: File,
     index: BTreeMap<Bytes, u64>, // key -> block offset
     blooms: Vec<BloomFilter>,
+    compressed: bool,
 }
 
 impl SstBlockReader {
@@ -275,6 +309,7 @@ impl SstBlockReader {
             file,
             index,
             blooms,
+            compressed: handle.compressed,
         })
     }
 
@@ -356,7 +391,14 @@ impl SstBlockReader {
     }
 
     fn decode_data_block(&self, data: &Bytes) -> Result<Vec<Record>> {
-        let mut buf = data.clone();
+        // Decompress if compressed
+        let decompressed_data = if self.compressed {
+            SstBlockWriter::decompress_data(data)?
+        } else {
+            data.clone()
+        };
+
+        let mut buf = decompressed_data;
         let count = buf.get_u32_le() as usize;
 
         let mut records = Vec::new();

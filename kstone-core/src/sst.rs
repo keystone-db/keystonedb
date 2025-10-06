@@ -8,16 +8,29 @@ const SST_HEADER_SIZE: usize = 16;
 const SST_MAGIC: u32 = 0x53535400; // "SST\0"
 
 /// Minimal SST for walking skeleton
-/// Format: [magic(4) | version(4) | count(4) | reserved(4)] [record...] [crc(4)]
+/// Format: [magic(4) | version(4) | count(4) | flags(4)] [record...] [crc(4)]
 /// Records are sorted by key
+/// flags bit 0: compression enabled (1 = compressed, 0 = uncompressed)
 pub struct SstWriter {
     records: Vec<Record>,
+    compress: bool,
+    compression_level: i32,
 }
 
 impl SstWriter {
     pub fn new() -> Self {
         Self {
             records: Vec::new(),
+            compress: false,
+            compression_level: 3,
+        }
+    }
+
+    pub fn with_compression(compress: bool, level: i32) -> Self {
+        Self {
+            records: Vec::new(),
+            compress,
+            compression_level: level.clamp(1, 22),
         }
     }
 
@@ -43,7 +56,10 @@ impl SstWriter {
         buf.put_u32(SST_MAGIC); // big-endian for magic
         buf.put_u32_le(1); // version
         buf.put_u32_le(self.records.len() as u32);
-        buf.put_u32_le(0); // reserved
+
+        // flags: bit 0 = compression
+        let flags = if self.compress { 1u32 } else { 0u32 };
+        buf.put_u32_le(flags);
 
         // Serialize all records
         let mut data = Vec::new();
@@ -54,9 +70,22 @@ impl SstWriter {
             data.extend_from_slice(&rec_data);
         }
 
-        buf.put_slice(&data);
+        // Compress if enabled
+        let final_data = if self.compress {
+            use std::io::Write;
+            let mut encoder = zstd::Encoder::new(Vec::new(), self.compression_level)
+                .map_err(|e| Error::CompressionError(format!("Failed to create encoder: {}", e)))?;
+            encoder.write_all(&data)
+                .map_err(|e| Error::CompressionError(format!("Failed to compress: {}", e)))?;
+            encoder.finish()
+                .map_err(|e| Error::CompressionError(format!("Failed to finish compression: {}", e)))?
+        } else {
+            data.clone()
+        };
 
-        // Write CRC
+        buf.put_slice(&final_data);
+
+        // Write CRC (of original uncompressed data for consistency)
         let crc = crc32fast::hash(&data);
         buf.put_u32_le(crc);
 
@@ -86,25 +115,41 @@ impl SstReader {
         }
 
         let count = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
+        let flags = u32::from_le_bytes([header[12], header[13], header[14], header[15]]);
+        let compressed = (flags & 1) != 0;
 
         // Read all data
-        let mut data = Vec::new();
-        file.read_to_end(&mut data)?;
+        let mut file_data = Vec::new();
+        file.read_to_end(&mut file_data)?;
 
-        // Verify CRC (last 4 bytes)
-        if data.len() < 4 {
+        // Verify CRC is present (last 4 bytes)
+        if file_data.len() < 4 {
             return Err(Error::Corruption("SST file too short".to_string()));
         }
 
-        let crc_offset = data.len() - 4;
+        let crc_offset = file_data.len() - 4;
         let expected_crc = u32::from_le_bytes([
-            data[crc_offset],
-            data[crc_offset + 1],
-            data[crc_offset + 2],
-            data[crc_offset + 3],
+            file_data[crc_offset],
+            file_data[crc_offset + 1],
+            file_data[crc_offset + 2],
+            file_data[crc_offset + 3],
         ]);
 
-        let actual_crc = crc32fast::hash(&data[..crc_offset]);
+        // Decompress if needed
+        let data = if compressed {
+            use std::io::Read;
+            let mut decoder = zstd::Decoder::new(&file_data[..crc_offset])
+                .map_err(|e| Error::CompressionError(format!("Failed to create decoder: {}", e)))?;
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)
+                .map_err(|e| Error::CompressionError(format!("Failed to decompress: {}", e)))?;
+            decompressed
+        } else {
+            file_data[..crc_offset].to_vec()
+        };
+
+        // Verify CRC (of decompressed data)
+        let actual_crc = crc32fast::hash(&data);
         if expected_crc != actual_crc {
             return Err(Error::ChecksumMismatch);
         }
@@ -112,7 +157,6 @@ impl SstReader {
         // Deserialize records
         let mut records = Vec::with_capacity(count);
         let mut offset = 0;
-        let data = &data[..crc_offset];
 
         while offset < data.len() {
             let len = u32::from_le_bytes([
@@ -268,5 +312,64 @@ mod tests {
         let pk = Bytes::from("user#1");
         let user1_recs: Vec<_> = reader.scan_prefix(&pk).collect();
         assert_eq!(user1_recs.len(), 2);
+    }
+
+    #[test]
+    fn test_sst_compression() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("compressed.sst");
+
+        // Write with compression
+        {
+            let mut writer = SstWriter::with_compression(true, 3);
+            for i in 0..100 {
+                let key = Key::new(format!("key{:03}", i).into_bytes());
+                let mut item = HashMap::new();
+                // Add some compressible data
+                item.insert("data".to_string(), Value::string(format!("This is some compressible test data for key {:03}", i)));
+                item.insert("number".to_string(), Value::number(i));
+                writer.add(Record::put(key, item, i));
+            }
+            writer.finish(&path).unwrap();
+        }
+
+        // Read and verify
+        let reader = SstReader::open(&path).unwrap();
+        assert_eq!(reader.records.len(), 100);
+
+        // Verify data integrity
+        for i in 0..100 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let rec = reader.get(&key).unwrap();
+            assert_eq!(rec.key, key);
+            if let Some(item) = &rec.value {
+                assert!(item.contains_key("data"));
+                assert!(item.contains_key("number"));
+            }
+        }
+
+        // Check that file is actually smaller with compression
+        let compressed_size = std::fs::metadata(&path).unwrap().len();
+
+        // Write uncompressed for comparison
+        let uncompressed_path = tmp.path().join("uncompressed.sst");
+        {
+            let mut writer = SstWriter::new(); // No compression
+            for i in 0..100 {
+                let key = Key::new(format!("key{:03}", i).into_bytes());
+                let mut item = HashMap::new();
+                item.insert("data".to_string(), Value::string(format!("This is some compressible test data for key {:03}", i)));
+                item.insert("number".to_string(), Value::number(i));
+                writer.add(Record::put(key, item, i));
+            }
+            writer.finish(&uncompressed_path).unwrap();
+        }
+
+        let uncompressed_size = std::fs::metadata(&uncompressed_path).unwrap().len();
+
+        // Compressed should be significantly smaller
+        assert!(compressed_size < uncompressed_size,
+            "Compressed size ({}) should be less than uncompressed size ({})",
+            compressed_size, uncompressed_size);
     }
 }

@@ -15,6 +15,13 @@ pub struct DatabaseConfig {
 
     /// Write buffer size for WAL/SST writes
     pub write_buffer_size: usize,
+
+    /// Enable compression for SST files
+    pub compression_enabled: bool,
+
+    /// Compression level (1-22, where 1 is fastest, 22 is best compression)
+    /// Default: 3 (balanced speed/ratio)
+    pub compression_level: i32,
 }
 
 impl Default for DatabaseConfig {
@@ -25,6 +32,8 @@ impl Default for DatabaseConfig {
             max_wal_size_bytes: None,
             max_total_disk_bytes: None,
             write_buffer_size: 1024,
+            compression_enabled: false,
+            compression_level: 3,
         }
     }
 }
@@ -65,6 +74,21 @@ impl DatabaseConfig {
         self
     }
 
+    /// Enable compression for SST files
+    pub fn with_compression(mut self) -> Self {
+        self.compression_enabled = true;
+        self
+    }
+
+    /// Set compression level (1-22)
+    /// Level 1 is fastest, level 22 provides best compression
+    /// Default: 3 (balanced speed/ratio)
+    pub fn with_compression_level(mut self, level: i32) -> Self {
+        self.compression_enabled = true;
+        self.compression_level = level.clamp(1, 22);
+        self
+    }
+
     /// Validate configuration values
     pub fn validate(&self) -> Result<(), String> {
         if self.max_memtable_records == 0 {
@@ -79,6 +103,10 @@ impl DatabaseConfig {
             if size == 0 {
                 return Err("max_memtable_size_bytes must be greater than 0 when set".to_string());
             }
+        }
+
+        if self.compression_level < 1 || self.compression_level > 22 {
+            return Err("compression_level must be between 1 and 22".to_string());
         }
 
         Ok(())

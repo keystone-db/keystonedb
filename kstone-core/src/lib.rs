@@ -23,6 +23,7 @@ pub mod stream; // Phase 3.4+ change data capture (streams)
 pub mod partiql; // Phase 4+ PartiQL (SQL-compatible query language)
 pub mod config; // Phase 8+ database configuration
 pub mod retry; // Phase 8+ retry logic with exponential backoff
+pub mod validation; // Schema validation and constraints
 
 pub use error::{Error, Result};
 pub use types::*;
@@ -31,3 +32,4 @@ pub use memory_lsm::MemoryLsmEngine;
 pub use compaction::{CompactionConfig, CompactionStats};
 pub use config::DatabaseConfig;
 pub use retry::{RetryPolicy, retry_with_policy, retry};
+pub use validation::{AttributeSchema, AttributeType, ValueConstraint, Validator};

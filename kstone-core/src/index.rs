@@ -126,6 +126,9 @@ pub struct TableSchema {
     /// Stream configuration (Phase 3.4+)
     #[serde(default)]
     pub stream_config: crate::stream::StreamConfig,
+    /// Attribute schemas for validation
+    #[serde(default)]
+    pub attribute_schemas: Vec<crate::validation::AttributeSchema>,
 }
 
 impl TableSchema {
@@ -205,6 +208,22 @@ impl TableSchema {
         }
 
         false
+    }
+
+    /// Add an attribute schema for validation
+    pub fn with_attribute(mut self, schema: crate::validation::AttributeSchema) -> Self {
+        self.attribute_schemas.push(schema);
+        self
+    }
+
+    /// Validate an item against the attribute schemas
+    pub fn validate_item(&self, item: &crate::Item) -> crate::Result<()> {
+        if self.attribute_schemas.is_empty() {
+            return Ok(()); // No validation if no schemas defined
+        }
+
+        let validator = crate::validation::Validator::from_schemas(self.attribute_schemas.clone());
+        validator.validate(item)
     }
 }
 

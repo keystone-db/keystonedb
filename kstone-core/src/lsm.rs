@@ -1084,8 +1084,11 @@ impl LsmEngine {
         // Filename format: {stripe:03}-{sst_id}.sst
         let sst_path = inner.dir.join(format!("{:03}-{}.sst", stripe_id, sst_id));
 
-        // Write SST from stripe's memtable
-        let mut writer = SstWriter::new();
+        // Write SST from stripe's memtable with compression settings from config
+        let mut writer = SstWriter::with_compression(
+            inner.config.compression_enabled,
+            inner.config.compression_level,
+        );
         for record in inner.stripes[stripe_id].memtable.values() {
             writer.add(record.clone());
         }
@@ -1114,8 +1117,13 @@ impl LsmEngine {
             let compacted_sst_id = inner.next_sst_id;
             inner.next_sst_id += 1;
 
-            // Perform compaction
-            let (new_sst, old_paths) = compaction_mgr.compact(ssts_to_compact, compacted_sst_id)?;
+            // Perform compaction with compression settings
+            let (new_sst, old_paths) = compaction_mgr.compact(
+                ssts_to_compact,
+                compacted_sst_id,
+                inner.config.compression_enabled,
+                inner.config.compression_level,
+            )?;
 
             // Record statistics
             inner.compaction_stats.record_ssts_merged(sst_count as u64);
@@ -1234,7 +1242,12 @@ impl LsmEngine {
             inner.next_sst_id += 1;
 
             let ssts_to_compact = &inner.stripes[stripe_id].ssts;
-            let (new_sst, old_paths) = compaction_mgr.compact(ssts_to_compact, compacted_sst_id)?;
+            let (new_sst, old_paths) = compaction_mgr.compact(
+                ssts_to_compact,
+                compacted_sst_id,
+                inner.config.compression_enabled,
+                inner.config.compression_level,
+            )?;
 
             inner.compaction_stats.record_ssts_merged(sst_count as u64);
             inner.compaction_stats.record_ssts_created(1);
