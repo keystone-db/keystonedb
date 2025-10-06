@@ -34,6 +34,18 @@ Fast, persistent, ACID-compliant storage with a familiar DynamoDB API, PartiQL s
 - **Background Compaction**: Automatic space reclamation and tombstone removal
 - **Crash Recovery**: Automatic recovery from WAL on database open
 - **Encryption**: Optional block-level encryption support
+- **Zstd Compression**: Configurable compression for SST files (2-5x storage savings)
+- **Size-Based Flushing**: Predictable memory usage with 4MB memtable default
+- **Schema Validation**: Attribute-level type checking and value constraints
+
+### Language Bindings
+KeystoneDB supports multiple programming languages:
+- **Go**: Embedded (CGO/FFI) and gRPC client
+- **Python**: Embedded (PyO3) and gRPC client
+- **JavaScript/TypeScript**: gRPC client
+- **Rust**: Native embedded API
+
+See [BINDINGS.md](BINDINGS.md) for installation and usage guides
 
 ## Installation
 

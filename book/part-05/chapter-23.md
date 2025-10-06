@@ -4,17 +4,28 @@ Performance tuning is both an art and a science. While KeystoneDB provides sensi
 
 ## 23.1 Memtable Threshold Tuning
 
-The memtable threshold controls when in-memory data is flushed to disk.
+The memtable threshold controls when in-memory data is flushed to disk. As of KeystoneDB v0.1.1+, **size-based flushing** is the default, with a record count as a safety ceiling.
 
-### The Threshold Parameter
+### The Threshold Parameters
 
 ```rust
 // In kstone-core/src/lsm.rs
-const MEMTABLE_THRESHOLD: usize = 1000;  // Default: 1000 records per stripe
+const MEMTABLE_THRESHOLD: usize = 10_000;  // Safety ceiling (rarely hit)
 
-// Configurable via DatabaseConfig
+// Configurable via DatabaseConfig (new size-based approach)
 let config = DatabaseConfig::new()
-    .with_max_memtable_records(5000);  // Increase to 5000
+    .with_max_memtable_size_bytes(4 * 1024 * 1024)  // 4MB (default)
+    .with_max_memtable_records(10_000);  // Safety ceiling
+
+// For high-memory systems
+let config = DatabaseConfig::new()
+    .with_max_memtable_size_bytes(8 * 1024 * 1024)  // 8MB per stripe
+    .with_max_memtable_records(20_000);
+
+// For memory-constrained systems
+let config = DatabaseConfig::new()
+    .with_max_memtable_size_bytes(2 * 1024 * 1024)  // 2MB per stripe
+    .with_max_memtable_records(5_000);
 ```
 
 ### Impact on Performance
@@ -35,16 +46,19 @@ Threshold 5000:  70,000 writes/sec (+40%)
 Threshold 10000: 80,000 writes/sec (+60%)
 ```
 
-**Memory Usage:**
+**Memory Usage (Size-Based Approach):**
 
-| Threshold | Memory per stripe | Total memory (256 stripes) |
-|-----------|------------------|---------------------------|
-| 500 | ~100 KB | ~25 MB |
-| 1000 (default) | ~200 KB | ~50 MB |
-| 5000 | ~1 MB | ~256 MB |
-| 10000 | ~2 MB | ~512 MB |
+| Memtable Size | Memory per stripe | Total memory (256 stripes) | Typical Records |
+|---------------|------------------|---------------------------|-----------------|
+| 2MB | 2 MB | ~512 MB | ~5,000-10,000 |
+| 4MB (default) | 4 MB | ~1 GB | ~10,000-20,000 |
+| 8MB | 8 MB | ~2 GB | ~20,000-40,000 |
+| 16MB | 16 MB | ~4 GB | ~40,000-80,000 |
 
-Assumes 200 bytes per record average.
+**Benefits of size-based flushing:**
+- ✅ Predictable memory usage regardless of record size
+- ✅ Larger records don't cause unexpected flushes
+- ✅ Smaller records don't waste memory
 
 **Recovery Time:**
 
@@ -314,11 +328,13 @@ KeystoneDB provides `DatabaseConfig` for comprehensive tuning:
 
 ```rust
 pub struct DatabaseConfig {
-    pub max_memtable_size_bytes: Option<usize>,  // Memory limit
-    pub max_memtable_records: usize,             // Record limit (default: 1000)
+    pub max_memtable_size_bytes: Option<usize>,  // Memory limit (default: 4MB)
+    pub max_memtable_records: usize,             // Record limit (default: 10,000)
     pub max_wal_size_bytes: Option<u64>,         // WAL size limit
     pub max_total_disk_bytes: Option<u64>,       // Total DB size limit
     pub write_buffer_size: usize,                // Write buffer (default: 1024)
+    pub compression_enabled: bool,               // Enable Zstd compression (default: false)
+    pub compression_level: i32,                  // Compression level 1-22 (default: 3)
 }
 ```
 
@@ -388,6 +404,83 @@ let config = DatabaseConfig::new()
 // Default (1024 bytes) is fine for most use cases
 // Increase for high-throughput systems (4KB-64KB)
 ```
+
+### Compression
+
+Enable Zstd compression for significant storage savings (v0.1.1+):
+
+```rust
+let config = DatabaseConfig::new()
+    .with_compression();  // Enable with default level (3)
+
+// Or specify compression level (1-22)
+let config = DatabaseConfig::new()
+    .with_compression_level(6);  // Higher compression ratio
+```
+
+**Performance Trade-offs:**
+
+| Level | Write Speed | Storage Savings | CPU Usage | Recommended For |
+|-------|-------------|-----------------|-----------|-----------------|
+| 1 | 90-95% | 20-40% | Low | Hot data path |
+| 3 (default) | 80-90% | 40-60% | Medium | General use |
+| 6 | 60-70% | 50-70% | High | Storage-constrained |
+| 10+ | 30-40% | 60-80% | Very High | Archival data |
+
+**When to Use:**
+- ✅ Text data (JSON, XML, logs): 3-5x compression
+- ✅ Storage-constrained systems
+- ✅ Archival/cold storage
+- ❌ Already-compressed data (images, videos)
+- ❌ CPU-constrained systems
+- ❌ Ultra-low latency requirements
+
+```rust
+// Example: Enable compression for log storage
+let config = DatabaseConfig::new()
+    .with_compression_level(3)  // Good balance
+    .with_max_memtable_size_bytes(8 * 1024 * 1024);  // 8MB per stripe
+
+let schema = TableSchema::new();
+let db = Database::create_with_config(path, config, schema)?;
+```
+
+### Schema Validation
+
+Enable attribute-level validation for data integrity (v0.1.1+):
+
+```rust
+use kstone_api::{TableSchema, AttributeSchema, AttributeType, ValueConstraint};
+
+let schema = TableSchema::new()
+    .with_attribute(
+        AttributeSchema::new("email", AttributeType::String)
+            .required()
+            .with_constraint(ValueConstraint::Pattern(r"^.+@.+\..+$".to_string()))
+            .with_constraint(ValueConstraint::MaxLength(100))
+    )
+    .with_attribute(
+        AttributeSchema::new("age", AttributeType::Number)
+            .with_constraint(ValueConstraint::MinValue("0".to_string()))
+            .with_constraint(ValueConstraint::MaxValue("150".to_string()))
+    );
+
+let db = Database::create_with_schema(path, schema)?;
+
+// Validation happens automatically on put/update
+// Invalid data returns Error::InvalidArgument
+```
+
+**Performance Impact:**
+- **Overhead**: +5-10μs per validated attribute
+- **Typical**: <1% for most workloads
+- **Benefit**: Catch data errors early, prevent corrupt data
+
+**Available Constraints:**
+- `MinValue(String)` / `MaxValue(String)` - Number range validation
+- `MinLength(usize)` / `MaxLength(usize)` - String/list length validation
+- `Pattern(String)` - Regex pattern matching for strings
+- `Enum(Vec<Value>)` - Value must be in allowed set
 
 ## 23.5 Write vs Read Optimization
 

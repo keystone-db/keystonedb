@@ -91,6 +91,60 @@ See [blog-engine/README.md](blog-engine/README.md) for full documentation.
 
 ---
 
+### 5. Language Bindings Examples
+
+KeystoneDB provides bindings for multiple languages, enabling you to use the database from Go, Python, and JavaScript.
+
+#### Go Embedded (`go-embedded/`)
+
+Direct in-process database access via CGO/FFI.
+
+**Features:**
+- Create, open, and close databases
+- Basic CRUD with partition and sort keys
+- Error handling
+- Zero network latency
+
+**Run it:**
+```bash
+cd examples/go-embedded
+go run .
+```
+
+See [go-embedded/README.md](go-embedded/README.md) and [../BINDINGS.md](../BINDINGS.md#go-embedded) for details.
+
+#### Python Embedded (`python-embedded/`)
+
+Direct in-process database access via PyO3.
+
+**Features:**
+- Contact manager CLI
+- Full value type support (string, number, boolean, list, map)
+- In-memory mode option
+- Pythonic API
+
+**Run it:**
+```bash
+cd examples/python-embedded
+pip install -r requirements.txt
+python contacts.py
+```
+
+See [python-embedded/README.md](python-embedded/README.md) and [../BINDINGS.md](../BINDINGS.md#python-embedded) for details.
+
+#### gRPC Clients (`grpc-client/`)
+
+Remote database access for Go, Python, and JavaScript.
+
+**Features:**
+- Multi-language interoperability
+- Full KeystoneDB API (Query, Scan, Batch operations)
+- Network-based architecture
+
+See [grpc-client/README.md](grpc-client/README.md) and [../BINDINGS.md](../BINDINGS.md#grpc-clients) for details.
+
+---
+
 ## What You'll Learn
 
 Each example progressively demonstrates more advanced KeystoneDB features:
