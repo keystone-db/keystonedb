@@ -27,8 +27,10 @@ pub struct DatabaseConfig {
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            max_memtable_size_bytes: None,
-            max_memtable_records: 1000,
+            // Default to 4MB memtable size for predictable memory usage
+            max_memtable_size_bytes: Some(4 * 1024 * 1024),
+            // Keep record count as safety ceiling (should rarely be hit)
+            max_memtable_records: 10_000,
             max_wal_size_bytes: None,
             max_total_disk_bytes: None,
             write_buffer_size: 1024,
@@ -120,9 +122,9 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = DatabaseConfig::default();
-        assert_eq!(config.max_memtable_records, 1000);
+        assert_eq!(config.max_memtable_records, 10_000);
         assert_eq!(config.write_buffer_size, 1024);
-        assert!(config.max_memtable_size_bytes.is_none());
+        assert_eq!(config.max_memtable_size_bytes, Some(4 * 1024 * 1024));
         assert!(config.max_wal_size_bytes.is_none());
         assert!(config.max_total_disk_bytes.is_none());
     }

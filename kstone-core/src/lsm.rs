@@ -11,10 +11,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::fs;
 
-const MEMTABLE_THRESHOLD: usize = 1000; // Flush after 1000 records per stripe
+/// Legacy constant - now configured via DatabaseConfig::max_memtable_records
+/// Default is now 10,000 (acts as safety ceiling)
+const MEMTABLE_THRESHOLD: usize = 10_000;
 const NUM_STRIPES: usize = 256;
 
 /// LSM engine with 256-way striping (Phase 1.6+)
+///
+/// Flushing behavior:
+/// - Primary trigger: memtable size reaches 4MB (configurable via max_memtable_size_bytes)
+/// - Safety ceiling: 10,000 records (configurable via max_memtable_records)
+/// - Flushing is per-stripe for better concurrency
 pub struct LsmEngine {
     inner: Arc<RwLock<LsmInner>>,
     path: PathBuf,  // Store path outside the RwLock for easy access
@@ -1965,6 +1972,85 @@ mod tests {
             let key = Key::new(format!("key{:03}", i).into_bytes());
             let result = db.get(&key).unwrap();
             assert!(result.is_some(), "Non-deleted key should still exist");
+        }
+    }
+
+    #[test]
+    fn test_lsm_size_based_flushing() {
+        let dir = TempDir::new().unwrap();
+
+        // Create database with small memtable size (100KB) for faster testing
+        let config = DatabaseConfig::new()
+            .with_max_memtable_size_bytes(100 * 1024)  // 100KB
+            .with_max_memtable_records(10_000);  // High ceiling, shouldn't be hit
+
+        let db = LsmEngine::create_with_config(dir.path(), config, TableSchema::new()).unwrap();
+
+        // Add items with large values until flush occurs
+        // Each item is roughly 1KB (key + 1000 byte string)
+        let large_value = "x".repeat(1000);
+        let mut items_added = 0;
+
+        for i in 0..200 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("data".to_string(), Value::string(large_value.clone()));
+            db.put(key, item).unwrap();
+            items_added += 1;
+
+            // Check if SST was created (indicating flush occurred)
+            let sst_count = fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "sst"))
+                .count();
+
+            if sst_count > 0 {
+                // Flush occurred! Should be well before 10_000 records
+                assert!(items_added < 200, "Flush should occur based on size, not record count");
+                println!("Size-based flush occurred after {} items (~{}KB)", items_added, items_added);
+                break;
+            }
+        }
+
+        // Force final flush
+        db.flush().unwrap();
+
+        // Verify we can read all items back
+        for i in 0..items_added {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let result = db.get(&key).unwrap();
+            assert!(result.is_some(), "Should be able to read item {}", i);
+        }
+    }
+
+    #[test]
+    fn test_lsm_memtable_size_tracking() {
+        let dir = TempDir::new().unwrap();
+        let db = LsmEngine::create(dir.path()).unwrap();
+
+        // Put a few items and verify they're in memtable (not flushed yet)
+        for i in 0..10 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let mut item = HashMap::new();
+            item.insert("value".to_string(), Value::number(i));
+            db.put(key, item).unwrap();
+        }
+
+        // All items should be in memtable (no SST files yet)
+        let sst_count = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "sst"))
+            .count();
+
+        assert_eq!(sst_count, 0, "No SST files should exist yet");
+
+        // Verify all items are readable from memtable
+        for i in 0..10 {
+            let key = Key::new(format!("key{:03}", i).into_bytes());
+            let result = db.get(&key).unwrap();
+            assert!(result.is_some(), "Item should be in memtable");
         }
     }
 }

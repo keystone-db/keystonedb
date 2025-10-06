@@ -1399,11 +1399,32 @@ Earlier versions had a critical bug: WAL/SST wrote in big-endian but read in lit
 ### File Position After Clone
 When cloning file handles (e.g., in `Wal::read_all()`), the clone inherits the current position. Always `seek()` after cloning if you need to read from a specific offset.
 
-### Memtable Flush Threshold
-Currently hardcoded at 1000 records (`MEMTABLE_THRESHOLD` in lsm.rs). When memtable reaches this size:
+### Memtable Flush Threshold (Updated: Size-Based Flushing)
+**Default behavior (configurable via `DatabaseConfig`):**
+- **Primary trigger:** Memtable size reaches **4MB** (`max_memtable_size_bytes`)
+- **Safety ceiling:** **10,000 records** (`max_memtable_records`) - rarely hit in normal operation
+
+**When memtable reaches threshold:**
 1. SST created with sorted records
 2. WAL rotated (old deleted, new created)
 3. Memtable cleared
+
+**Benefits of size-based flushing:**
+- **Predictable memory usage:** Each stripe's memtable capped at 4MB
+- **Better handling of variable record sizes:** Large records trigger flush sooner
+- **Configurable:** Adjust via `DatabaseConfig::with_max_memtable_size_bytes(bytes)`
+
+**Example custom configuration:**
+```rust
+use kstone_core::{LsmEngine, DatabaseConfig, TableSchema};
+
+// Create DB with 8MB memtable size
+let config = DatabaseConfig::new()
+    .with_max_memtable_size_bytes(8 * 1024 * 1024)
+    .with_max_memtable_records(20_000);
+
+let db = LsmEngine::create_with_config(path, config, TableSchema::new())?;
+```
 
 ### Recovery on Open
 `Database::open()` automatically:
