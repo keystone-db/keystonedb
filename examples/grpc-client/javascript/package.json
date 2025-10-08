@@ -1,0 +1,21 @@
+{
+  "name": "keystonedb-grpc-example",
+  "version": "1.0.0",
+  "description": "KeystoneDB JavaScript gRPC client example",
+  "main": "tasks.js",
+  "scripts": {
+    "start": "node tasks.js"
+  },
+  "keywords": [
+    "keystonedb",
+    "grpc",
+    "database",
+    "example"
+  ],
+  "author": "KeystoneDB Contributors",
+  "license": "MIT OR Apache-2.0",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.0",
+    "@grpc/proto-loader": "^0.7.12"
+  }
+}

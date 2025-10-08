@@ -38,14 +38,85 @@ Fast, persistent, ACID-compliant storage with a familiar DynamoDB API, PartiQL s
 - **Size-Based Flushing**: Predictable memory usage with 4MB memtable default
 - **Schema Validation**: Attribute-level type checking and value constraints
 
-### Language Bindings
-KeystoneDB supports multiple programming languages:
-- **Go**: Embedded (CGO/FFI) and gRPC client
-- **Python**: Embedded (PyO3) and gRPC client
-- **JavaScript/TypeScript**: gRPC client
-- **Rust**: Native embedded API
+### Language Bindings 🎉 NEW in v0.2.0
+KeystoneDB supports multiple programming languages with both **embedded** and **gRPC client** APIs:
 
-See [BINDINGS.md](BINDINGS.md) for installation and usage guides
+| Language | Embedded | gRPC Client | Package |
+|----------|----------|-------------|---------|
+| **Go** | ✅ (cgo/FFI) | ✅ | `github.com/keystone-db/keystonedb/bindings/go/*` |
+| **Python** | ✅ (PyO3) | ✅ | `pip install keystonedb` |
+| **JavaScript** | ⚠️ (in progress) | ✅ | `npm install @keystonedb/client` |
+| **Rust** | ✅ (native) | ✅ | `cargo add kstone-api` |
+
+#### Quick Start Examples
+
+**Python** (Embedded):
+```python
+import keystonedb
+db = keystonedb.Database.create("./my.keystone")
+db.put(b"user#123", {"name": "Alice", "age": 30})
+item = db.get(b"user#123")
+```
+
+**Go** (Embedded):
+```go
+import kstone "github.com/keystone-db/keystonedb/bindings/go/embedded"
+db, _ := kstone.Create("./my.keystone")
+db.Put("user#123", "name", "Alice")
+item, _ := db.Get("user#123")
+```
+
+**JavaScript** (gRPC Client):
+```javascript
+import { Client } from '@keystonedb/client';
+const client = new Client('localhost:50051');
+await client.put({
+  partitionKey: Buffer.from('user#123'),
+  item: { attributes: { name: 'Alice' }}
+});
+```
+
+See [bindings/README.md](bindings/README.md) for full documentation and examples.
+
+### Cloud Sync 🌐 NEW in v0.2.0
+Bidirectional sync with S3-compatible cloud storage (AWS S3, MinIO, Backblaze B2, etc.):
+
+- **Merkle Tree Change Tracking**: Efficient delta detection
+- **Conflict Resolution**: Vector clock-based automatic conflict resolution
+- **Offline Queue**: Continue working offline, sync when connection restored
+- **S3-Compatible**: Works with any S3-compatible storage provider
+
+```rust
+use kstone_sync::{SyncEngine, S3SyncTarget};
+
+// Configure S3 sync target
+let target = S3SyncTarget::new(
+    "my-bucket",
+    "keystone-db/",
+    "us-east-1",
+)?;
+
+// Create sync engine
+let sync_engine = SyncEngine::new(db, target)?;
+
+// Perform bidirectional sync
+sync_engine.sync().await?;
+```
+
+See `examples/s3-backup/` for a complete example.
+
+### Interactive Notebook 📓 NEW in v0.2.0
+Web-based Jupyter-like interface for interactive database exploration:
+
+```bash
+# Start notebook server (coming soon in v0.2.1)
+kstone notebook mydb.keystone
+
+# Opens browser at http://localhost:8888
+# - Execute PartiQL queries interactively
+# - Real-time WebSocket updates
+# - Visual query results
+```
 
 ## Installation
 
@@ -313,7 +384,7 @@ KeystoneDB is organized as a Cargo workspace with 4 crates:
 
 ## Project Status
 
-**Phase 8 Complete** - Production-ready with observability and configuration
+**v0.2.0** - Multi-language bindings, cloud sync, and advanced features
 
 - ✅ **Phase 0**: Walking Skeleton (Put/Get/Delete, WAL, SST, LSM)
 - ✅ **Phase 1**: Full storage engine (256 stripes, flush, recovery)
@@ -324,8 +395,11 @@ KeystoneDB is organized as a Cargo workspace with 4 crates:
 - ✅ **Phase 6**: In-memory mode and test utilities
 - ✅ **Phase 7**: Advanced error handling and crash recovery tests
 - ✅ **Phase 8**: Observability and configuration (stats(), health(), DatabaseConfig, benchmarks)
+- 🎉 **NEW in v0.2.0**: Language bindings (Go/Python/JS), Cloud sync (S3), Interactive notebook
 
 **All tests passing** across all crates
+
+See [CHANGELOG.md](CHANGELOG.md) for full release history.
 
 ## Performance
 

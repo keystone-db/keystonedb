@@ -1,0 +1,36 @@
+{
+  "name": "@keystonedb/client",
+  "version": "0.2.0",
+  "description": "KeystoneDB gRPC client for Node.js and browsers",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "proto": "grpc_tools_node_protoc --js_out=import_style=commonjs,binary:./src/proto --grpc_out=grpc_js:./src/proto --ts_out=grpc_js:./src/proto -I ../../../kstone-proto/proto ../../../kstone-proto/proto/keystone.proto",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "database",
+    "dynamodb",
+    "key-value",
+    "grpc",
+    "keystonedb"
+  ],
+  "author": "KeystoneDB Contributors",
+  "license": "MIT OR Apache-2.0",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.9.0",
+    "@grpc/proto-loader": "^0.7.10"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "grpc-tools": "^1.12.4",
+    "grpc_tools_node_protoc_ts": "^5.3.3",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keystone-db/keystonedb.git",
+    "directory": "bindings/javascript/client"
+  }
+}

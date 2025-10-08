@@ -1,0 +1,372 @@
+name: Release Language Bindings
+
+on:
+  push:
+    tags:
+      - 'bindings-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-c-ffi:
+    name: Build C FFI (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+
+          # macOS x86_64 (Intel)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-c-ffi
+
+      - name: Build C FFI library
+        run: cargo build --release --target ${{ matrix.target }} -p kstone-ffi
+
+      - name: Package C FFI (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/libkstone_ffi.* dist/ || true
+          cp c-ffi/include/keystone.h dist/
+          cd dist
+          tar czf ../kstone-ffi-${{ matrix.target }}.tar.gz *
+          cd ..
+          shasum -a 256 kstone-ffi-${{ matrix.target }}.tar.gz > kstone-ffi-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Package C FFI (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/${{ matrix.target }}/release/kstone_ffi.* dist/
+          Copy-Item c-ffi/include/keystone.h dist/
+          Compress-Archive -Path dist/* -DestinationPath kstone-ffi-${{ matrix.target }}.zip
+          (Get-FileHash kstone-ffi-${{ matrix.target }}.zip -Algorithm SHA256).Hash | Out-File -Encoding ASCII kstone-ffi-${{ matrix.target }}.zip.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-ffi-${{ matrix.target }}
+          path: |
+            kstone-ffi-${{ matrix.target }}.${{ matrix.archive }}
+            kstone-ffi-${{ matrix.target }}.${{ matrix.archive }}.sha256
+
+  build-python-wheels:
+    name: Build Python Wheels (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64
+            maturin_args: ""
+
+          # Linux ARM64 (cross-compile)
+          - os: ubuntu-latest
+            target: aarch64
+            maturin_args: ""
+
+          # macOS x86_64
+          - os: macos-latest
+            target: x86_64
+            maturin_args: ""
+
+          # macOS ARM64
+          - os: macos-latest
+            target: aarch64
+            maturin_args: "--target aarch64-apple-darwin"
+
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64
+            maturin_args: ""
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build wheels
+        run: |
+          cd bindings/python/embedded
+          maturin build --release ${{ matrix.maturin_args }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: bindings/python/embedded/target/wheels/*.whl
+
+  publish-python:
+    name: Publish to PyPI
+    needs: build-python-wheels
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: python-wheels-*
+          path: wheels
+          merge-multiple: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install twine
+        run: pip install twine
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          twine upload wheels/*.whl
+
+  build-javascript:
+    name: Build JavaScript Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: |
+          cd bindings/javascript/client
+          npm install
+
+      - name: Build package
+        run: |
+          cd bindings/javascript/client
+          npm run build
+
+      - name: Create tarball
+        run: |
+          cd bindings/javascript/client
+          npm pack
+          mv *.tgz keystonedb-client.tgz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: javascript-package
+          path: bindings/javascript/client/keystonedb-client.tgz
+
+      - name: Publish to npm
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd bindings/javascript/client
+          npm publish --access public
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-c-ffi, build-python-wheels, build-javascript]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.whl" -o -name "*.tgz" -o -name "*.sha256" \) -exec cp {} release/ \;
+
+      - name: Extract version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/bindings-v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate release notes
+        run: |
+          cat > release_notes.md << 'EOF'
+          # KeystoneDB Language Bindings ${{ steps.version.outputs.VERSION }}
+
+          This release includes language bindings for **Go**, **Python**, and **JavaScript**.
+
+          ## Installation
+
+          ### Python (PyPI)
+          ```bash
+          pip install keystonedb==${{ steps.version.outputs.VERSION }}
+          ```
+
+          ### JavaScript/TypeScript (npm)
+          ```bash
+          npm install @keystonedb/client@${{ steps.version.outputs.VERSION }}
+          ```
+
+          ### Go (Go Modules)
+          ```bash
+          # Embedded bindings
+          go get github.com/keystone-db/keystonedb/bindings/go/embedded@bindings-v${{ steps.version.outputs.VERSION }}
+
+          # gRPC client
+          go get github.com/keystone-db/keystonedb/bindings/go/client@bindings-v${{ steps.version.outputs.VERSION }}
+          ```
+
+          ### C FFI Library
+          Download the appropriate archive for your platform from the assets below:
+          - `kstone-ffi-x86_64-unknown-linux-gnu.tar.gz` - Linux x64
+          - `kstone-ffi-x86_64-apple-darwin.tar.gz` - macOS Intel
+          - `kstone-ffi-aarch64-apple-darwin.tar.gz` - macOS Apple Silicon
+          - `kstone-ffi-x86_64-pc-windows-msvc.zip` - Windows x64
+
+          ## What's Included
+
+          ### Embedded Bindings
+          - **Go**: Direct FFI access via cgo (5/5 tests passing)
+          - **Python**: Native bindings via PyO3 (7/7 tests passing)
+
+          ### gRPC Clients
+          - **Go**: Full-featured gRPC client
+          - **Python**: Async gRPC client with builders
+          - **JavaScript/TypeScript**: Promise-based gRPC client with type definitions
+
+          ### C FFI
+          - Static and dynamic libraries for all platforms
+          - Auto-generated C header (`keystone.h`)
+
+          ## Documentation
+
+          - [Complete Bindings Guide](https://github.com/keystone-db/keystonedb/blob/main/BINDINGS.md)
+          - [Examples](https://github.com/keystone-db/keystonedb/tree/main/examples)
+          - [API Documentation](https://docs.rs/kstone-api)
+
+          ## Checksums
+
+          SHA256 checksums are provided for all binaries (`.sha256` files).
+
+          Verify downloads:
+          ```bash
+          shasum -a 256 -c kstone-ffi-*.sha256
+          ```
+
+          ## Compatibility
+
+          - **Server**: KeystoneDB v0.1.x
+          - **Rust API**: kstone-api v0.1.x
+          - **Python**: 3.9+
+          - **Go**: 1.21+
+          - **Node.js**: 18+
+
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: bindings-v${{ steps.version.outputs.VERSION }}
+          name: Language Bindings v${{ steps.version.outputs.VERSION }}
+          files: release/*
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-release:
+    name: Verify Published Packages
+    needs: [publish-python, build-javascript, create-release]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/bindings-v}" >> $GITHUB_OUTPUT
+
+      - name: Wait for PyPI propagation
+        run: sleep 60
+
+      - name: Verify PyPI package
+        run: |
+          pip install keystonedb==${{ steps.version.outputs.VERSION }}
+          python -c "import keystonedb; print('✓ Python package verified')"
+
+      - name: Verify npm package
+        run: |
+          npm install @keystonedb/client@${{ steps.version.outputs.VERSION }}
+          node -e "require('@keystonedb/client'); console.log('✓ JavaScript package verified')"

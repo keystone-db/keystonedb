@@ -1,0 +1,16 @@
+[package]
+name = "keystonedb-py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "keystonedb"
+crate-type = ["cdylib"]
+
+[dependencies]
+kstone-api = { path = "../../../kstone-api", version = "0.1.0" }
+kstone-core = { path = "../../../kstone-core", version = "0.1.0" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[build-dependencies]
+pyo3-build-config = "0.22"
