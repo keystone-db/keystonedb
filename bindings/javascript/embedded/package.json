@@ -1,0 +1,50 @@
+{
+  "name": "@keystonedb/embedded",
+  "version": "0.1.0",
+  "description": "KeystoneDB embedded database for Node.js (native bindings)",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "node --test",
+    "universal": "napi universal",
+    "version": "napi version"
+  },
+  "keywords": [
+    "database",
+    "dynamodb",
+    "key-value",
+    "embedded",
+    "native",
+    "keystonedb"
+  ],
+  "author": "KeystoneDB Contributors",
+  "license": "MIT OR Apache-2.0",
+  "napi": {
+    "name": "keystonedb",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu",
+        "armv7-unknown-linux-gnueabihf",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">= 14"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keystone-db/keystonedb.git",
+    "directory": "bindings/javascript/embedded"
+  }
+}

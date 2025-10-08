@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "grpcio-tools>=1.60.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keystonedb-client"
+version = "0.1.0"
+description = "Python gRPC client for KeystoneDB"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT OR Apache-2.0"}
+authors = [
+    {name = "KeystoneDB Contributors"}
+]
+dependencies = [
+    "grpcio>=1.60.0",
+    "protobuf>=4.25.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/keystone-db/keystonedb"
+Repository = "https://github.com/keystone-db/keystonedb"

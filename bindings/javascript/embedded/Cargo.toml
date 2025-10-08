@@ -1,0 +1,16 @@
+[package]
+name = "keystonedb-node"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+kstone-api = { path = "../../../kstone-api", version = "0.1.0" }
+kstone-core = { path = "../../../kstone-core", version = "0.1.0" }
+napi = { version = "2.16", features = ["napi8", "async"] }
+napi-derive = "2.16"
+
+[build-dependencies]
+napi-build = "2.1"

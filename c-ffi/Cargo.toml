@@ -1,0 +1,16 @@
+[package]
+name = "kstone-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+kstone-api = { path = "../kstone-api", version = "0.1.0" }
+kstone-core = { path = "../kstone-core", version = "0.1.0" }
+
+[build-dependencies]
+cbindgen = "0.27"
