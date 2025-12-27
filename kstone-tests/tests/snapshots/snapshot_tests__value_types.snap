@@ -1,0 +1,30 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+expression: values
+---
+- - string
+  - "S(\"hello\")"
+- - number
+  - "N(\"42\")"
+- - number_decimal
+  - "N(\"3.14159\")"
+- - number_negative
+  - "N(\"-999\")"
+- - bool_true
+  - Bool(true)
+- - bool_false
+  - Bool(false)
+- - "null"
+  - "Null"
+- - binary
+  - "B(b\"binary data\")"
+- - list_empty
+  - "L([])"
+- - list_mixed
+  - "L([S(\"a\"), N(\"1\"), Bool(true)])"
+- - map_empty
+  - "M({})"
+- - timestamp
+  - Ts(1704067200000)
+- - vector
+  - "VecF32([1.0, 2.0, 3.0])"

@@ -1,0 +1,9 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+expression: stable
+---
+found_count: 3
+keys_found:
+  - item_0
+  - item_2
+  - item_4

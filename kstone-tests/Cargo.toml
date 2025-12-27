@@ -19,6 +19,11 @@ tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 criterion.workspace = true
+proptest.workspace = true
+rand = "0.8"
+insta = { version = "1.34", features = ["yaml"] }
+serde = { version = "1", features = ["derive"] }
+bytes = "1"
 
 [[bench]]
 name = "database_bench"

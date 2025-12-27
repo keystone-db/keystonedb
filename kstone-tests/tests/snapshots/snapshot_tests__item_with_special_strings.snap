@@ -1,0 +1,14 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+expression: sorted
+---
+empty:
+  S: ""
+newlines:
+  S: "line1\nline2\nline3"
+quotes:
+  S: "He said \"hello\""
+spaces:
+  S: "  spaces  "
+unicode:
+  S: Hello 世界 🌍

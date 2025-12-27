@@ -1,0 +1,20 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+expression: encoded
+---
+- - simple
+  - pk_len: 10
+    sk_len: ~
+    stripe: 0
+- - with_hash
+  - pk_len: 8
+    sk_len: ~
+    stripe: 125
+- - composite
+  - pk_len: 2
+    sk_len: 2
+    stripe: 217
+- - composite_complex
+  - pk_len: 8
+    sk_len: 15
+    stripe: 125

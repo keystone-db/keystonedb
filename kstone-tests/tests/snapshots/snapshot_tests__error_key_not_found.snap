@@ -1,0 +1,5 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+expression: result
+---
+None

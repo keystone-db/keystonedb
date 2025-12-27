@@ -1,0 +1,16 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+expression: sorted
+---
+bool_false:
+  Bool: false
+bool_true:
+  Bool: true
+large_number:
+  N: "9999999999"
+negative_number:
+  N: "-123"
+number_field:
+  N: "42"
+string_field:
+  S: hello world

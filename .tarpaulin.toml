@@ -1,0 +1,51 @@
+# Code coverage configuration for cargo-tarpaulin
+# Install: cargo install cargo-tarpaulin
+# Run: cargo tarpaulin
+
+[default]
+# Output configuration
+out = ["Html", "Lcov"]
+output-dir = "target/coverage"
+
+# Test configuration
+run-types = ["Tests"]
+workspace = true
+
+# Skip test crate itself (we're testing the main crates)
+exclude = ["kstone-tests", "c-ffi"]
+
+# Additional flags
+verbose = true
+all-features = true
+
+# Ignore test files and generated code
+ignore-tests = true
+
+# Fail if coverage is below threshold
+# Uncomment to enforce minimum coverage
+# fail-under = 70
+
+# Line coverage (default)
+engine = "auto"
+
+# Timeout per test
+timeout = "300s"
+
+[minimum]
+# Minimum coverage configuration for CI
+out = ["Json"]
+output-dir = "target/coverage"
+workspace = true
+exclude = ["kstone-tests", "c-ffi"]
+engine = "llvm"
+timeout = "120s"
+fail-under = 50
+
+[quick]
+# Quick coverage check
+out = ["Stdout"]
+workspace = true
+exclude = ["kstone-tests", "c-ffi"]
+skip-clean = true
+engine = "auto"
+timeout = "120s"

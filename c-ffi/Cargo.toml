@@ -1,0 +1,13 @@
+[package]
+name = "kstone-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "C Foreign Function Interface for KeystoneDB"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+kstone-api = { path = "../kstone-api" }
