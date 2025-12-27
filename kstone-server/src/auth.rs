@@ -2,6 +2,7 @@
 ///
 /// Provides simple API key authentication using Bearer tokens in the Authorization header.
 
+use subtle::ConstantTimeEq;
 use tonic::{Request, Status};
 use tracing::{debug, warn};
 
@@ -69,7 +70,18 @@ impl AuthInterceptor {
         // Extract and validate API key
         let provided_key = &auth_str[7..]; // Skip "Bearer "
 
-        if provided_key != expected_key {
+        // Use constant-time comparison to prevent timing attacks
+        let provided_bytes = provided_key.as_bytes();
+        let expected_bytes = expected_key.as_bytes();
+
+        // Constant-time comparison - always examines all bytes
+        let keys_equal = if provided_bytes.len() == expected_bytes.len() {
+            provided_bytes.ct_eq(expected_bytes).into()
+        } else {
+            false
+        };
+
+        if !keys_equal {
             warn!("Request rejected: invalid API key");
             return Err(Status::unauthenticated("Invalid API key"));
         }
