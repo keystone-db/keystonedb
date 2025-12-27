@@ -666,7 +666,7 @@ impl SyncEngine {
             }
             SyncEndpoint::FileSystem { path } => {
                 // Use filesystem protocol for local database sync
-                let protocol = crate::protocol::filesystem::FilesystemProtocol::new(path.clone())
+                let protocol = crate::protocol::filesystem::FilesystemProtocol::new(path.clone())?
                     .with_local_db(self.db.clone());
                 Ok(Box::new(protocol))
             }
@@ -711,7 +711,7 @@ impl SyncEngine {
             }
             SyncEndpoint::FileSystem { path } => {
                 // Use filesystem protocol for local database sync
-                let protocol = crate::protocol::filesystem::FilesystemProtocol::new(path.clone())
+                let protocol = crate::protocol::filesystem::FilesystemProtocol::new(path.clone())?
                     .with_local_db(self.db.clone());
                 Ok(Box::new(protocol))
             }

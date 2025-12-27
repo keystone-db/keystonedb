@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{PathBuf, Component};
 use std::sync::Arc;
 use tracing;
 
@@ -34,14 +34,39 @@ pub struct FilesystemProtocol {
 
 impl FilesystemProtocol {
     /// Create a new filesystem protocol
-    pub fn new(path: String) -> Self {
-        Self {
-            remote_path: PathBuf::from(path),
+    ///
+    /// # Security
+    ///
+    /// This function validates the provided path to prevent path traversal attacks.
+    /// Paths containing `..` components are rejected.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the remote database
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path contains path traversal attempts (`..` components).
+    pub fn new(path: String) -> Result<Self> {
+        let path_buf = PathBuf::from(&path);
+
+        // Check for path traversal attempts
+        for component in path_buf.components() {
+            if let Component::ParentDir = component {
+                return Err(anyhow::anyhow!(
+                    "Path traversal not allowed: '..' component found in path: {}",
+                    path
+                ));
+            }
+        }
+
+        Ok(Self {
+            remote_path: path_buf,
             remote_db: None,
             remote_endpoint_id: None,
             remote_clock: None,
             local_db: None,
-        }
+        })
     }
 
     /// Set the local database reference for comparisons
@@ -237,7 +262,7 @@ mod tests {
         drop(db);
 
         // Create protocol and connect
-        let mut protocol = FilesystemProtocol::new(db_path.to_string_lossy().to_string());
+        let mut protocol = FilesystemProtocol::new(db_path.to_string_lossy().to_string()).unwrap();
         assert!(protocol.connect().await.is_ok());
         assert!(protocol.remote_db.is_some());
 
@@ -255,7 +280,7 @@ mod tests {
         let _db = Database::create(&db_path).unwrap();
 
         // Connect protocol
-        let mut protocol = FilesystemProtocol::new(db_path.to_string_lossy().to_string());
+        let mut protocol = FilesystemProtocol::new(db_path.to_string_lossy().to_string()).unwrap();
         protocol.connect().await.unwrap();
 
         // Push items
@@ -283,5 +308,30 @@ mod tests {
         // Verify items were stored
         assert!(pulled[0].1.is_some());
         assert!(pulled[1].1.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_filesystem_protocol_path_traversal_rejected() {
+        // Test that paths with .. are rejected
+        let result = FilesystemProtocol::new("../etc/passwd".to_string());
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("Path traversal not allowed"));
+        }
+
+        // Test with path in the middle
+        let result = FilesystemProtocol::new("/var/lib/../etc/passwd".to_string());
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("Path traversal not allowed"));
+        }
+
+        // Test that valid paths are accepted
+        let result = FilesystemProtocol::new("/var/lib/keystone/test.db".to_string());
+        assert!(result.is_ok());
+
+        // Test that relative paths without .. are accepted
+        let result = FilesystemProtocol::new("test.db".to_string());
+        assert!(result.is_ok());
     }
 }

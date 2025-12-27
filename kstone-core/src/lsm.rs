@@ -1069,6 +1069,18 @@ impl LsmEngine {
             return;
         }
 
+        // Validate record size to prevent memory exhaustion
+        let record_size = crate::stream::estimate_record_size(&record);
+        if record_size > crate::stream::MAX_STREAM_RECORD_SIZE {
+            tracing::warn!(
+                size = record_size,
+                max_size = crate::stream::MAX_STREAM_RECORD_SIZE,
+                key = ?record.key,
+                "Skipping oversized stream record to prevent memory exhaustion"
+            );
+            return;
+        }
+
         // Add to buffer
         inner.stream_buffer.push_back(record);
 
