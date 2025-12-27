@@ -1,0 +1,6 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+expression: stable_response
+---
+item_count: 3
+has_last_key: true

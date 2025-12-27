@@ -59,6 +59,9 @@ cargo test -p kstone-tests --test stability_tests --ignored
 # Run sync integration tests (requires filesystem access)
 cargo test -p kstone-sync --test sync_integration_test
 
+# Run snapshot tests
+cargo test -p kstone-tests --test snapshot_tests
+
 # Run benchmarks
 cargo bench -p kstone-tests
 
@@ -112,6 +115,64 @@ Long-running tests (run with `--ignored`):
 **Sync Tests** (`kstone-sync/tests/`)
 - `sync_integration_test.rs` - Full sync workflow
 - `s3_test.rs` - S3 backend (requires credentials)
+
+**Snapshot Tests** (`snapshot_tests.rs`)
+Uses insta for capturing and comparing output snapshots:
+- Error message formats
+- Database statistics output
+- Query/scan response structures
+- Key encoding formats
+- Value type representations
+- Batch operation results
+
+### Code Coverage
+
+```bash
+# Install coverage tool
+cargo install cargo-tarpaulin
+
+# Run full coverage analysis (HTML + LCOV reports)
+./scripts/coverage.sh
+
+# Quick coverage check (stdout only)
+./scripts/coverage.sh quick
+
+# CI coverage with fail threshold
+./scripts/coverage.sh minimum
+
+# Alternative: llvm-cov based coverage
+./scripts/coverage.sh llvm
+```
+
+Coverage reports are generated in `target/coverage/`.
+
+### Fuzz Testing
+
+```bash
+# Install cargo-fuzz (requires nightly Rust)
+rustup default nightly
+cargo install cargo-fuzz
+
+# List available fuzz targets
+./scripts/fuzz.sh list
+
+# Run a specific fuzz target (default 60s)
+./scripts/fuzz.sh fuzz_put_get
+./scripts/fuzz.sh fuzz_put_get 300  # Run for 5 minutes
+
+# Run all fuzz targets
+./scripts/fuzz.sh all
+
+# Show corpus statistics
+./scripts/fuzz.sh corpus fuzz_put_get
+```
+
+**Available Fuzz Targets:**
+- `fuzz_put_get` - Database put/get/delete operations
+- `fuzz_expression_parser` - Condition expression parsing
+- `fuzz_key_encoding` - Key encode/decode roundtrip
+- `fuzz_value_serialization` - Value type handling
+- `fuzz_partiql` - PartiQL parser
 
 ### CLI Usage
 ```bash

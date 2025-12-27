@@ -1,0 +1,54 @@
+[package]
+name = "kstone-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+kstone-core = { path = "../kstone-core" }
+kstone-api = { path = "../kstone-api" }
+tempfile = "3"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_put_get"
+path = "fuzz_targets/fuzz_put_get.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_expression_parser"
+path = "fuzz_targets/fuzz_expression_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_key_encoding"
+path = "fuzz_targets/fuzz_key_encoding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_value_serialization"
+path = "fuzz_targets/fuzz_value_serialization.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_partiql"
+path = "fuzz_targets/fuzz_partiql.rs"
+test = false
+doc = false
+bench = false
