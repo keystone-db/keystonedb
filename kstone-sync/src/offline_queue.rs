@@ -452,7 +452,10 @@ mod tests {
     fn test_retry_backoff() {
         let mut policy = RetryPolicy::default();
         policy.max_retries = 3;
-        policy.initial_backoff_ms = 100;
+        // After first failure, backoff = initial_backoff_ms * 2^retry_count
+        // With retry_count=1: backoff = 50 * 2 = 100ms
+        // We'll sleep 150ms to ensure it's ready
+        policy.initial_backoff_ms = 50;
 
         let queue = OfflineQueue::new(policy, 100);
 
@@ -475,7 +478,8 @@ mod tests {
         let batch = queue.get_next_batch(1);
         assert_eq!(batch.len(), 0);
 
-        // After backoff, should be available
+        // After backoff (50 * 2^1 = 100ms), should be available
+        // Sleep 150ms to ensure we're past the backoff
         std::thread::sleep(Duration::from_millis(150));
         let batch = queue.get_next_batch(1);
         assert_eq!(batch.len(), 1);
