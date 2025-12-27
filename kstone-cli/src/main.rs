@@ -885,6 +885,9 @@ pub fn format_response_compact(response: &ExecuteStatementResponse) -> Result<()
         ExecuteStatementResponse::Delete { .. } => {
             println!("{}", "✓ DELETE completed".green());
         }
+        _ => {
+            eprintln!("Unsupported statement response type");
+        }
     }
     Ok(())
 }
