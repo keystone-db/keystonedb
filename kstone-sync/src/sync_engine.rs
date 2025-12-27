@@ -289,10 +289,14 @@ impl SyncEngine {
 
         let total_changes = changes.len();
 
-        // Debug: Log discovered changes
-        eprintln!("DEBUG: Discovered {} changes", total_changes);
+        // Log discovered changes
+        tracing::debug!(total_changes, "Discovered changes");
         for (key, diff_type) in &changes {
-            eprintln!("  Key: {:?}, Type: {:?}", String::from_utf8_lossy(&key.pk), diff_type);
+            tracing::debug!(
+                pk = ?String::from_utf8_lossy(&key.pk),
+                diff_type = ?diff_type,
+                "Change detected"
+            );
         }
 
         if total_changes == 0 {
@@ -375,10 +379,14 @@ impl SyncEngine {
 
         let total_changes = changes.len();
 
-        // Debug: Log discovered changes
-        eprintln!("DEBUG: Discovered {} changes", total_changes);
+        // Log discovered changes
+        tracing::debug!(total_changes, "Discovered changes");
         for (key, diff_type) in &changes {
-            eprintln!("  Key: {:?}, Type: {:?}", String::from_utf8_lossy(&key.pk), diff_type);
+            tracing::debug!(
+                pk = ?String::from_utf8_lossy(&key.pk),
+                diff_type = ?diff_type,
+                "Change detected"
+            );
         }
 
         if total_changes == 0 {

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing;
 
 use kstone_api::Database;
 use kstone_core::{Item, Key};
@@ -103,10 +104,10 @@ impl SyncProtocol for FilesystemProtocol {
             let local_records = local_db.scan_with_keys(10000)?;
             let mut local_items = Vec::new();
 
-            eprintln!("DEBUG: Local database has {} records", local_records.len());
+            tracing::debug!(record_count = local_records.len(), "Local database records");
             for (key, item) in local_records {
                 let key_bytes = key.encode();
-                eprintln!("  Local key: {:?}", String::from_utf8_lossy(&key.pk));
+                tracing::debug!(pk = ?String::from_utf8_lossy(&key.pk), "Local key");
                 let value_bytes = serde_json::to_vec(&item)?;
                 local_items.push((key_bytes.clone(), bytes::Bytes::from(value_bytes)));
                 local_key_map.insert(key_bytes, key);
@@ -118,10 +119,10 @@ impl SyncProtocol for FilesystemProtocol {
             let remote_records = remote_db.scan_with_keys(10000)?;
             let mut remote_items = Vec::new();
 
-            eprintln!("DEBUG: Remote database has {} records", remote_records.len());
+            tracing::debug!(record_count = remote_records.len(), "Remote database records");
             for (key, item) in remote_records {
                 let key_bytes = key.encode();
-                eprintln!("  Remote key: {:?}", String::from_utf8_lossy(&key.pk));
+                tracing::debug!(pk = ?String::from_utf8_lossy(&key.pk), "Remote key");
                 let value_bytes = serde_json::to_vec(&item)?;
                 remote_items.push((key_bytes.clone(), bytes::Bytes::from(value_bytes)));
                 remote_key_map.insert(key_bytes, key);
