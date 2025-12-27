@@ -1,3 +1,16 @@
+//! Error types for KeystoneDB operations.
+//!
+//! This module defines the [`Result`] type alias and [`Error`] enum used throughout KeystoneDB.
+//!
+//! # Error Categories
+//!
+//! Errors can be broadly categorized as:
+//! - **Transient**: [`Error::Io`], [`Error::WalFull`] - can be retried
+//! - **Logical**: [`Error::NotFound`], [`Error::InvalidArgument`], [`Error::ConditionalCheckFailed`] - not retryable
+//! - **Fatal**: [`Error::Corruption`], [`Error::ManifestCorruption`] - indicates data loss
+//!
+//! Use [`Error::is_retryable()`] to check if an operation can be retried.
+
 use std::io;
 use thiserror::Error;
 
