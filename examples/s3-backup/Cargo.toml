@@ -10,5 +10,5 @@ path = "main.rs"
 [dependencies]
 kstone-api = { path = "../../kstone-api" }
 kstone-sync = { path = "../../kstone-sync", features = ["s3-sync"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }
 anyhow = "1"

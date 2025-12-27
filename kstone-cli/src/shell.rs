@@ -358,6 +358,7 @@ impl Shell {
                 kstone_api::ExecuteStatementResponse::Insert { .. } => 1,
                 kstone_api::ExecuteStatementResponse::Update { .. } => 1,
                 kstone_api::ExecuteStatementResponse::Delete { .. } => 1,
+                _ => 0,
             };
 
             println!(

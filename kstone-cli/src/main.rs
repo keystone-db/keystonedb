@@ -267,6 +267,9 @@ fn main() -> Result<()> {
                         println!("✗ Delete failed");
                     }
                 }
+                _ => {
+                    eprintln!("Unsupported statement response type");
+                }
             }
         }
 
@@ -806,6 +809,9 @@ pub fn format_response_table(response: &ExecuteStatementResponse) -> Result<()> 
         ExecuteStatementResponse::Delete { .. } => {
             println!("{}", "✓ Item deleted successfully".green());
         }
+        _ => {
+            eprintln!("Unsupported statement response type");
+        }
     }
     Ok(())
 }
@@ -839,6 +845,9 @@ pub fn format_response_json(response: &ExecuteStatementResponse) -> Result<()> {
         }
         ExecuteStatementResponse::Delete { .. } => {
             println!("{}", r#"{"success": true, "operation": "DELETE"}"#.green());
+        }
+        _ => {
+            eprintln!("{}", r#"{"success": false, "error": "Unsupported response type"}"#);
         }
     }
     Ok(())

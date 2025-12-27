@@ -14,6 +14,7 @@ use kstone_core::{
 };
 
 /// Request to execute a PartiQL statement
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ExecuteStatementRequest {
     sql: String,
@@ -27,6 +28,7 @@ impl ExecuteStatementRequest {
 
 /// Response from executing a PartiQL statement
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ExecuteStatementResponse {
     /// SELECT statement result
     Select {

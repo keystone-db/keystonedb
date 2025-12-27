@@ -3,6 +3,7 @@ use thiserror::Error;
 use tonic::Status;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ClientError {
     #[error("Not found: {0}")]
     NotFound(String),

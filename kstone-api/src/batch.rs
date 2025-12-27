@@ -10,7 +10,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct BatchGetRequest {
     /// Keys to retrieve
-    pub keys: Vec<Key>,
+    keys: Vec<Key>,
 }
 
 impl BatchGetRequest {
@@ -35,7 +35,7 @@ impl BatchGetRequest {
     }
 
     /// Get the keys
-    pub(crate) fn keys(&self) -> &[Key] {
+    pub fn keys(&self) -> &[Key] {
         &self.keys
     }
 }
@@ -77,7 +77,7 @@ pub enum BatchWriteItem {
 #[derive(Debug, Clone)]
 pub struct BatchWriteRequest {
     /// Write items
-    pub items: Vec<BatchWriteItem>,
+    items: Vec<BatchWriteItem>,
 }
 
 impl BatchWriteRequest {
@@ -121,7 +121,7 @@ impl BatchWriteRequest {
     }
 
     /// Get the items
-    pub(crate) fn items(&self) -> &[BatchWriteItem] {
+    pub fn items(&self) -> &[BatchWriteItem] {
         &self.items
     }
 }

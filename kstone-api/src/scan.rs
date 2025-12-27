@@ -6,6 +6,7 @@ use kstone_core::{Item, Key, iterator::{ScanParams, ScanResult}};
 use bytes::Bytes;
 
 /// Scan builder
+#[derive(Debug, Clone)]
 pub struct Scan {
     params: ScanParams,
 }

@@ -6,6 +6,7 @@ use kstone_core::{Item, Key, expression::{UpdateAction, UpdateExpressionParser, 
 use bytes::Bytes;
 
 /// Update builder
+#[derive(Debug, Clone)]
 pub struct Update {
     key: Key,
     expression: String,
