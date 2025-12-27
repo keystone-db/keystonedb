@@ -11,3 +11,5 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 kstone-api = { path = "../kstone-api" }
+serde_json.workspace = true
+base64.workspace = true
