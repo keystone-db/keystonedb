@@ -1,0 +1,152 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { Tag, GitCommit, Calendar } from 'lucide-react';
+
+const releases = [
+  {
+    version: '0.4.0',
+    date: '2024-12-01',
+    tag: 'latest',
+    changes: [
+      { type: 'feature', text: 'Cloud Sync with S3 and filesystem backends' },
+      { type: 'feature', text: 'Interactive CLI shell with autocomplete and history' },
+      { type: 'feature', text: 'PartiQL SQL-compatible query language' },
+      { type: 'feature', text: 'gRPC server for remote access' },
+      { type: 'improvement', text: 'Vector clock-based conflict resolution' },
+      { type: 'improvement', text: 'Merkle tree-based diff detection for sync' },
+    ],
+  },
+  {
+    version: '0.3.0',
+    date: '2024-10-15',
+    changes: [
+      { type: 'feature', text: 'Local Secondary Indexes (LSI)' },
+      { type: 'feature', text: 'Global Secondary Indexes (GSI)' },
+      { type: 'feature', text: 'Time To Live (TTL) support' },
+      { type: 'feature', text: 'Change Data Capture (CDC) streams' },
+      { type: 'improvement', text: 'Index projection types (All, KeysOnly, Include)' },
+    ],
+  },
+  {
+    version: '0.2.0',
+    date: '2024-08-01',
+    changes: [
+      { type: 'feature', text: 'Complete DynamoDB API (Query, Scan, Update, Batch, Transactions)' },
+      { type: 'feature', text: 'Condition expressions with attribute functions' },
+      { type: 'feature', text: 'Update expressions (SET, REMOVE, ADD)' },
+      { type: 'improvement', text: 'Improved query performance with bloom filters' },
+      { type: 'fix', text: 'Fixed endianness bug in WAL/SST format' },
+    ],
+  },
+  {
+    version: '0.1.0',
+    date: '2024-06-01',
+    changes: [
+      { type: 'feature', text: 'Initial release with LSM tree storage engine' },
+      { type: 'feature', text: '256-stripe architecture for parallelism' },
+      { type: 'feature', text: 'Write-ahead log with crash recovery' },
+      { type: 'feature', text: 'Basic CRUD operations (Put, Get, Delete)' },
+      { type: 'feature', text: 'CLI tool for database management' },
+    ],
+  },
+];
+
+const typeColors = {
+  feature: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+  improvement: 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300',
+  fix: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
+  breaking: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+};
+---
+
+<BaseLayout title="Changelog - KeystoneDB" description="Release history and changelog for KeystoneDB">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          Changelog
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+          Release history and version updates for KeystoneDB
+        </p>
+      </div>
+
+      <!-- Releases -->
+      <div class="max-w-3xl mx-auto space-y-8">
+        {releases.map((release, index) => (
+          <div class="card">
+            <div class="flex items-start justify-between mb-6">
+              <div class="flex items-center gap-3">
+                <Tag className="w-6 h-6 text-primary-600 dark:text-primary-400" />
+                <h2 class="text-2xl font-bold text-slate-900 dark:text-white">
+                  v{release.version}
+                </h2>
+                {release.tag && (
+                  <span class="px-2 py-1 bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 rounded text-xs font-semibold">
+                    {release.tag}
+                  </span>
+                )}
+              </div>
+              <div class="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+                <Calendar className="w-4 h-4" />
+                <span class="text-sm">{release.date}</span>
+              </div>
+            </div>
+
+            <ul class="space-y-3">
+              {release.changes.map((change) => (
+                <li class="flex items-start gap-3">
+                  <span class={`px-2 py-0.5 rounded text-xs font-medium flex-shrink-0 ${typeColors[change.type]}`}>
+                    {change.type}
+                  </span>
+                  <span class="text-slate-700 dark:text-slate-300">{change.text}</span>
+                </li>
+              ))}
+            </ul>
+
+            {index === 0 && (
+              <div class="mt-6 pt-6 border-t border-slate-200 dark:border-slate-700">
+                <a
+                  href="https://github.com/keystone-db/keystonedb/releases"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-2 text-primary-600 dark:text-primary-400 hover:underline"
+                >
+                  <GitCommit className="w-4 h-4" />
+                  View all releases on GitHub
+                </a>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <!-- Subscribe -->
+      <div class="max-w-3xl mx-auto mt-12">
+        <div class="card text-center bg-gradient-to-r from-primary-50 to-accent-50 dark:from-primary-900/20 dark:to-accent-900/20">
+          <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-2">
+            Stay Updated
+          </h3>
+          <p class="text-slate-600 dark:text-slate-300 mb-4">
+            Watch the GitHub repository to get notified about new releases
+          </p>
+          <a
+            href="https://github.com/keystone-db/keystonedb"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-primary"
+          >
+            Watch on GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

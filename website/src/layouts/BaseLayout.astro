@@ -16,16 +16,25 @@ const { title, description = 'KeystoneDB - Single-file, embedded, DynamoDB-style
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
+    <meta name="robots" content="index, follow" />
+    <meta name="author" content="KeystoneDB Contributors" />
+    <meta name="keywords" content="KeystoneDB, DynamoDB, embedded database, Rust, LSM tree, PartiQL, ACID, local-first" />
 
     <!-- Open Graph -->
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="KeystoneDB" />
+    <meta property="og:url" content={Astro.url.href} />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
+    <meta name="twitter:site" content="@keystonedb" />
+
+    <!-- Canonical URL -->
+    <link rel="canonical" href={Astro.url.href} />
 
     <title>{title}</title>
 
