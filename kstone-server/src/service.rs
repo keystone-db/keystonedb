@@ -868,3 +868,845 @@ impl KeystoneDb for KeystoneService {
         }))
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kstone_proto::{self as proto, value::Value as ProtoValueEnum};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+    use tonic::Request;
+
+    /// Test helper to create a KeystoneService with a temporary database
+    fn create_test_service() -> (KeystoneService, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let db = Database::create(temp_dir.path()).unwrap();
+
+        // Use unlimited rate limiter for tests
+        let rate_limiter = Arc::new(RateLimiter::new(0, 0));
+
+        let service = KeystoneService::new(db, rate_limiter);
+        (service, temp_dir)
+    }
+
+    /// Helper to create a proto Value from a string
+    fn proto_string(s: &str) -> proto::Value {
+        proto::Value {
+            value: Some(ProtoValueEnum::StringValue(s.to_string())),
+        }
+    }
+
+    /// Helper to create a proto Value from a number
+    fn proto_number(n: &str) -> proto::Value {
+        proto::Value {
+            value: Some(ProtoValueEnum::NumberValue(n.to_string())),
+        }
+    }
+
+    /// Helper to create a proto Value from a bool
+    fn proto_bool(b: bool) -> proto::Value {
+        proto::Value {
+            value: Some(ProtoValueEnum::BoolValue(b)),
+        }
+    }
+
+    /// Helper to create a proto Item
+    fn proto_item(attributes: HashMap<String, proto::Value>) -> proto::Item {
+        proto::Item { attributes }
+    }
+
+    // ============================================================================
+    // Basic CRUD Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_put_and_get_basic() {
+        let (service, _dir) = create_test_service();
+
+        // Create an item
+        let mut attributes = HashMap::new();
+        attributes.insert("name".to_string(), proto_string("Alice"));
+        attributes.insert("age".to_string(), proto_number("30"));
+        attributes.insert("active".to_string(), proto_bool(true));
+
+        // Put the item
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"user#123".to_vec(),
+            sort_key: None,
+            item: Some(proto_item(attributes.clone())),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let put_response = service.put(put_req).await.unwrap();
+        assert!(put_response.into_inner().success);
+
+        // Get the item back
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"user#123".to_vec(),
+            sort_key: None,
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        let item = get_response.into_inner().item.unwrap();
+
+        // Verify attributes
+        assert_eq!(item.attributes.len(), 3);
+        assert!(item.attributes.contains_key("name"));
+        assert!(item.attributes.contains_key("age"));
+        assert!(item.attributes.contains_key("active"));
+    }
+
+    #[tokio::test]
+    async fn test_put_and_get_with_sort_key() {
+        let (service, _dir) = create_test_service();
+
+        let mut attributes = HashMap::new();
+        attributes.insert("data".to_string(), proto_string("test data"));
+
+        // Put with sort key
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"user#456".to_vec(),
+            sort_key: Some(b"profile".to_vec()),
+            item: Some(proto_item(attributes)),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.put(put_req).await.unwrap();
+
+        // Get with sort key
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"user#456".to_vec(),
+            sort_key: Some(b"profile".to_vec()),
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        let item = get_response.into_inner().item.unwrap();
+
+        assert_eq!(item.attributes.len(), 1);
+        assert!(item.attributes.contains_key("data"));
+    }
+
+    #[tokio::test]
+    async fn test_get_not_found() {
+        let (service, _dir) = create_test_service();
+
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"nonexistent".to_vec(),
+            sort_key: None,
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        let inner = get_response.into_inner();
+
+        // Item should be None when not found
+        assert!(inner.item.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_basic() {
+        let (service, _dir) = create_test_service();
+
+        // First put an item
+        let mut attributes = HashMap::new();
+        attributes.insert("temp".to_string(), proto_string("data"));
+
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"temp#1".to_vec(),
+            sort_key: None,
+            item: Some(proto_item(attributes)),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.put(put_req).await.unwrap();
+
+        // Delete the item
+        let delete_req = Request::new(proto::DeleteRequest {
+            partition_key: b"temp#1".to_vec(),
+            sort_key: None,
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let delete_response = service.delete(delete_req).await.unwrap();
+        assert!(delete_response.into_inner().success);
+
+        // Verify it's gone
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"temp#1".to_vec(),
+            sort_key: None,
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        assert!(get_response.into_inner().item.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_with_sort_key() {
+        let (service, _dir) = create_test_service();
+
+        // Put item with sort key
+        let mut attributes = HashMap::new();
+        attributes.insert("data".to_string(), proto_string("value"));
+
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"user#789".to_vec(),
+            sort_key: Some(b"settings".to_vec()),
+            item: Some(proto_item(attributes)),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.put(put_req).await.unwrap();
+
+        // Delete with sort key
+        let delete_req = Request::new(proto::DeleteRequest {
+            partition_key: b"user#789".to_vec(),
+            sort_key: Some(b"settings".to_vec()),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.delete(delete_req).await.unwrap();
+
+        // Verify deletion
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"user#789".to_vec(),
+            sort_key: Some(b"settings".to_vec()),
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        assert!(get_response.into_inner().item.is_none());
+    }
+
+    // ============================================================================
+    // Query Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_query_basic() {
+        let (service, _dir) = create_test_service();
+
+        // Put multiple items with same PK, different SKs
+        for i in 1..=3 {
+            let mut attributes = HashMap::new();
+            attributes.insert("index".to_string(), proto_number(&i.to_string()));
+
+            let put_req = Request::new(proto::PutRequest {
+                partition_key: b"org#acme".to_vec(),
+                sort_key: Some(format!("user#{:03}", i).into_bytes()),
+                item: Some(proto_item(attributes)),
+                condition_expression: None,
+                expression_values: HashMap::new(),
+            });
+
+            service.put(put_req).await.unwrap();
+        }
+
+        // Query all items with this partition key
+        let query_req = Request::new(proto::QueryRequest {
+            partition_key: b"org#acme".to_vec(),
+            sort_key_condition: None,
+            limit: None,
+            exclusive_start_key: None,
+            scan_forward: None,
+            index_name: None,
+            filter_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let query_response = service.query(query_req).await.unwrap();
+        let response = query_response.into_inner();
+
+        assert_eq!(response.count, 3);
+        assert_eq!(response.items.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_query_with_begins_with() {
+        let (service, _dir) = create_test_service();
+
+        // Put items with different prefixes
+        let items = vec![
+            ("org#xyz", "user#alice"),
+            ("org#xyz", "user#bob"),
+            ("org#xyz", "admin#charlie"),
+        ];
+
+        for (pk, sk) in items {
+            let mut attributes = HashMap::new();
+            attributes.insert("name".to_string(), proto_string(sk));
+
+            let put_req = Request::new(proto::PutRequest {
+                partition_key: pk.as_bytes().to_vec(),
+                sort_key: Some(sk.as_bytes().to_vec()),
+                item: Some(proto_item(attributes)),
+                condition_expression: None,
+                expression_values: HashMap::new(),
+            });
+
+            service.put(put_req).await.unwrap();
+        }
+
+        // Query with begins_with condition
+        let sk_condition = proto::SortKeyCondition {
+            condition: Some(proto::sort_key_condition::Condition::BeginsWith(
+                proto_string("user#"),
+            )),
+        };
+
+        let query_req = Request::new(proto::QueryRequest {
+            partition_key: b"org#xyz".to_vec(),
+            sort_key_condition: Some(sk_condition),
+            limit: None,
+            exclusive_start_key: None,
+            scan_forward: None,
+            index_name: None,
+            filter_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let query_response = service.query(query_req).await.unwrap();
+        let response = query_response.into_inner();
+
+        // Should only return user# items, not admin#
+        assert_eq!(response.count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_query_with_limit() {
+        let (service, _dir) = create_test_service();
+
+        // Put 5 items
+        for i in 1..=5 {
+            let mut attributes = HashMap::new();
+            attributes.insert("index".to_string(), proto_number(&i.to_string()));
+
+            let put_req = Request::new(proto::PutRequest {
+                partition_key: b"batch#test".to_vec(),
+                sort_key: Some(format!("item#{:03}", i).into_bytes()),
+                item: Some(proto_item(attributes)),
+                condition_expression: None,
+                expression_values: HashMap::new(),
+            });
+
+            service.put(put_req).await.unwrap();
+        }
+
+        // Query with limit
+        let query_req = Request::new(proto::QueryRequest {
+            partition_key: b"batch#test".to_vec(),
+            sort_key_condition: None,
+            limit: Some(3),
+            exclusive_start_key: None,
+            scan_forward: None,
+            index_name: None,
+            filter_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let query_response = service.query(query_req).await.unwrap();
+        let response = query_response.into_inner();
+
+        assert_eq!(response.count, 3);
+        assert!(response.last_evaluated_key.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_query_with_between() {
+        let (service, _dir) = create_test_service();
+
+        // Put items with numeric sort keys
+        for i in 1..=10 {
+            let mut attributes = HashMap::new();
+            attributes.insert("value".to_string(), proto_number(&i.to_string()));
+
+            let put_req = Request::new(proto::PutRequest {
+                partition_key: b"range#test".to_vec(),
+                sort_key: Some(format!("{:03}", i).into_bytes()),
+                item: Some(proto_item(attributes)),
+                condition_expression: None,
+                expression_values: HashMap::new(),
+            });
+
+            service.put(put_req).await.unwrap();
+        }
+
+        // Query with between condition (003 to 007)
+        let sk_condition = proto::SortKeyCondition {
+            condition: Some(proto::sort_key_condition::Condition::Between(
+                proto::BetweenCondition {
+                    lower: Some(proto_string("003")),
+                    upper: Some(proto_string("007")),
+                },
+            )),
+        };
+
+        let query_req = Request::new(proto::QueryRequest {
+            partition_key: b"range#test".to_vec(),
+            sort_key_condition: Some(sk_condition),
+            limit: None,
+            exclusive_start_key: None,
+            scan_forward: None,
+            index_name: None,
+            filter_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let query_response = service.query(query_req).await.unwrap();
+        let response = query_response.into_inner();
+
+        // Should return items 3, 4, 5, 6, 7 (5 items)
+        assert_eq!(response.count, 5);
+    }
+
+    // ============================================================================
+    // Batch Operation Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_batch_get() {
+        let (service, _dir) = create_test_service();
+
+        // Put multiple items
+        for i in 1..=3 {
+            let mut attributes = HashMap::new();
+            attributes.insert("id".to_string(), proto_number(&i.to_string()));
+
+            let put_req = Request::new(proto::PutRequest {
+                partition_key: format!("item#{}", i).into_bytes(),
+                sort_key: None,
+                item: Some(proto_item(attributes)),
+                condition_expression: None,
+                expression_values: HashMap::new(),
+            });
+
+            service.put(put_req).await.unwrap();
+        }
+
+        // Batch get
+        let keys = vec![
+            proto::Key {
+                partition_key: b"item#1".to_vec(),
+                sort_key: None,
+            },
+            proto::Key {
+                partition_key: b"item#2".to_vec(),
+                sort_key: None,
+            },
+            proto::Key {
+                partition_key: b"item#3".to_vec(),
+                sort_key: None,
+            },
+        ];
+
+        let batch_get_req = Request::new(proto::BatchGetRequest { keys });
+
+        let batch_response = service.batch_get(batch_get_req).await.unwrap();
+        let response = batch_response.into_inner();
+
+        assert_eq!(response.count, 3);
+        assert_eq!(response.items.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_batch_get_with_missing_items() {
+        let (service, _dir) = create_test_service();
+
+        // Put only one item
+        let mut attributes = HashMap::new();
+        attributes.insert("data".to_string(), proto_string("exists"));
+
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"exists#1".to_vec(),
+            sort_key: None,
+            item: Some(proto_item(attributes)),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.put(put_req).await.unwrap();
+
+        // Try to get multiple items (only one exists)
+        let keys = vec![
+            proto::Key {
+                partition_key: b"exists#1".to_vec(),
+                sort_key: None,
+            },
+            proto::Key {
+                partition_key: b"missing#1".to_vec(),
+                sort_key: None,
+            },
+        ];
+
+        let batch_get_req = Request::new(proto::BatchGetRequest { keys });
+
+        let batch_response = service.batch_get(batch_get_req).await.unwrap();
+        let response = batch_response.into_inner();
+
+        // Should only return the one that exists
+        assert_eq!(response.count, 1);
+        assert_eq!(response.items.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_batch_write_puts() {
+        let (service, _dir) = create_test_service();
+
+        // Create batch write with multiple puts
+        let writes = vec![
+            proto::WriteRequest {
+                request: Some(proto::write_request::Request::Put(proto::PutItem {
+                    partition_key: b"batch#1".to_vec(),
+                    sort_key: None,
+                    item: Some(proto_item({
+                        let mut attrs = HashMap::new();
+                        attrs.insert("name".to_string(), proto_string("item1"));
+                        attrs
+                    })),
+                })),
+            },
+            proto::WriteRequest {
+                request: Some(proto::write_request::Request::Put(proto::PutItem {
+                    partition_key: b"batch#2".to_vec(),
+                    sort_key: None,
+                    item: Some(proto_item({
+                        let mut attrs = HashMap::new();
+                        attrs.insert("name".to_string(), proto_string("item2"));
+                        attrs
+                    })),
+                })),
+            },
+        ];
+
+        let batch_write_req = Request::new(proto::BatchWriteRequest { writes });
+
+        let batch_response = service.batch_write(batch_write_req).await.unwrap();
+        assert!(batch_response.into_inner().success);
+
+        // Verify items were created
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"batch#1".to_vec(),
+            sort_key: None,
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        assert!(get_response.into_inner().item.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_batch_write_mixed_operations() {
+        let (service, _dir) = create_test_service();
+
+        // First put an item to delete later
+        let mut attributes = HashMap::new();
+        attributes.insert("temp".to_string(), proto_string("delete_me"));
+
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"to_delete".to_vec(),
+            sort_key: None,
+            item: Some(proto_item(attributes)),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.put(put_req).await.unwrap();
+
+        // Batch write with put and delete
+        let writes = vec![
+            proto::WriteRequest {
+                request: Some(proto::write_request::Request::Put(proto::PutItem {
+                    partition_key: b"new_item".to_vec(),
+                    sort_key: None,
+                    item: Some(proto_item({
+                        let mut attrs = HashMap::new();
+                        attrs.insert("status".to_string(), proto_string("created"));
+                        attrs
+                    })),
+                })),
+            },
+            proto::WriteRequest {
+                request: Some(proto::write_request::Request::Delete(proto::DeleteKey {
+                    partition_key: b"to_delete".to_vec(),
+                    sort_key: None,
+                })),
+            },
+        ];
+
+        let batch_write_req = Request::new(proto::BatchWriteRequest { writes });
+
+        let batch_response = service.batch_write(batch_write_req).await.unwrap();
+        assert!(batch_response.into_inner().success);
+
+        // Verify new item exists
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"new_item".to_vec(),
+            sort_key: None,
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        assert!(get_response.into_inner().item.is_some());
+
+        // Verify deleted item is gone
+        let get_req = Request::new(proto::GetRequest {
+            partition_key: b"to_delete".to_vec(),
+            sort_key: None,
+        });
+
+        let get_response = service.get(get_req).await.unwrap();
+        assert!(get_response.into_inner().item.is_none());
+    }
+
+    // ============================================================================
+    // Error Handling Tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_put_without_item() {
+        let (service, _dir) = create_test_service();
+
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"test".to_vec(),
+            sort_key: None,
+            item: None, // Missing item
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let result = service.put(put_req).await;
+        assert!(result.is_err());
+
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("Item required"));
+    }
+
+    #[tokio::test]
+    async fn test_conditional_put_failure() {
+        let (service, _dir) = create_test_service();
+
+        // First put an item
+        let mut attributes = HashMap::new();
+        attributes.insert("name".to_string(), proto_string("Alice"));
+
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"user#conditional".to_vec(),
+            sort_key: None,
+            item: Some(proto_item(attributes.clone())),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.put(put_req).await.unwrap();
+
+        // Try to put again with attribute_not_exists condition (should fail)
+        let mut expression_values = HashMap::new();
+        expression_values.insert(":name".to_string(), proto_string("Bob"));
+
+        let conditional_put_req = Request::new(proto::PutRequest {
+            partition_key: b"user#conditional".to_vec(),
+            sort_key: None,
+            item: Some(proto_item(attributes)),
+            condition_expression: Some("attribute_not_exists(name)".to_string()),
+            expression_values,
+        });
+
+        let result = service.put(conditional_put_req).await;
+        assert!(result.is_err());
+
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn test_update_basic() {
+        let (service, _dir) = create_test_service();
+
+        // First put an item
+        let mut attributes = HashMap::new();
+        attributes.insert("name".to_string(), proto_string("Alice"));
+        attributes.insert("age".to_string(), proto_number("30"));
+
+        let put_req = Request::new(proto::PutRequest {
+            partition_key: b"user#update".to_vec(),
+            sort_key: None,
+            item: Some(proto_item(attributes)),
+            condition_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        service.put(put_req).await.unwrap();
+
+        // Update the item
+        let mut expression_values = HashMap::new();
+        expression_values.insert(":new_age".to_string(), proto_number("31"));
+
+        let update_req = Request::new(proto::UpdateRequest {
+            partition_key: b"user#update".to_vec(),
+            sort_key: None,
+            update_expression: "SET age = :new_age".to_string(),
+            condition_expression: None,
+            expression_values,
+        });
+
+        let update_response = service.update(update_req).await.unwrap();
+        let response = update_response.into_inner();
+
+        assert!(response.item.is_some());
+        let item = response.item.unwrap();
+
+        // Verify age was updated
+        if let Some(proto::Value {
+            value: Some(ProtoValueEnum::NumberValue(age)),
+        }) = item.attributes.get("age")
+        {
+            assert_eq!(age, "31");
+        } else {
+            panic!("Age attribute not found or has wrong type");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_scan_basic() {
+        let (service, _dir) = create_test_service();
+
+        // Put multiple items
+        for i in 1..=5 {
+            let mut attributes = HashMap::new();
+            attributes.insert("index".to_string(), proto_number(&i.to_string()));
+
+            let put_req = Request::new(proto::PutRequest {
+                partition_key: format!("scan#{}", i).into_bytes(),
+                sort_key: None,
+                item: Some(proto_item(attributes)),
+                condition_expression: None,
+                expression_values: HashMap::new(),
+            });
+
+            service.put(put_req).await.unwrap();
+        }
+
+        // Scan all items
+        let scan_req = Request::new(proto::ScanRequest {
+            limit: None,
+            exclusive_start_key: None,
+            segment: None,
+            total_segments: None,
+            index_name: None,
+            filter_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let scan_response = service.scan(scan_req).await.unwrap();
+        let mut stream = scan_response.into_inner();
+
+        // Get the first (and only) response from the stream
+        use futures::StreamExt;
+        let response = stream.next().await.unwrap().unwrap();
+
+        // Should return all items
+        assert!(response.count >= 5);
+        assert!(response.items.len() >= 5);
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_limit() {
+        let (service, _dir) = create_test_service();
+
+        // Put 10 items
+        for i in 1..=10 {
+            let mut attributes = HashMap::new();
+            attributes.insert("value".to_string(), proto_number(&i.to_string()));
+
+            let put_req = Request::new(proto::PutRequest {
+                partition_key: format!("scan_limit#{}", i).into_bytes(),
+                sort_key: None,
+                item: Some(proto_item(attributes)),
+                condition_expression: None,
+                expression_values: HashMap::new(),
+            });
+
+            service.put(put_req).await.unwrap();
+        }
+
+        // Scan with limit
+        let scan_req = Request::new(proto::ScanRequest {
+            limit: Some(5),
+            exclusive_start_key: None,
+            segment: None,
+            total_segments: None,
+            index_name: None,
+            filter_expression: None,
+            expression_values: HashMap::new(),
+        });
+
+        let scan_response = service.scan(scan_req).await.unwrap();
+        let mut stream = scan_response.into_inner();
+
+        use futures::StreamExt;
+        let response = stream.next().await.unwrap().unwrap();
+
+        // Should return at most 5 items
+        assert!(response.count <= 5);
+        assert!(response.items.len() <= 5);
+    }
+
+    // ============================================================================
+    // Error Mapping Tests
+    // ============================================================================
+
+    #[test]
+    fn test_map_error_not_found() {
+        let err = KsError::NotFound("Item not found".to_string());
+        let status = map_error(err);
+        assert_eq!(status.code(), tonic::Code::NotFound);
+    }
+
+    #[test]
+    fn test_map_error_invalid_query() {
+        let err = KsError::InvalidQuery("Bad query".to_string());
+        let status = map_error(err);
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn test_map_error_conditional_check_failed() {
+        let err = KsError::ConditionalCheckFailed("Condition not met".to_string());
+        let status = map_error(err);
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[test]
+    fn test_map_error_transaction_canceled() {
+        let err = KsError::TransactionCanceled("Transaction failed".to_string());
+        let status = map_error(err);
+        assert_eq!(status.code(), tonic::Code::Aborted);
+    }
+
+    #[test]
+    fn test_map_error_corruption() {
+        let err = KsError::Corruption("Data corrupted".to_string());
+        let status = map_error(err);
+        assert_eq!(status.code(), tonic::Code::DataLoss);
+    }
+
+    #[test]
+    fn test_map_error_already_exists() {
+        let err = KsError::AlreadyExists("Item exists".to_string());
+        let status = map_error(err);
+        assert_eq!(status.code(), tonic::Code::AlreadyExists);
+    }
+
+    #[test]
+    fn test_map_error_resource_exhausted() {
+        let err = KsError::ResourceExhausted("Out of resources".to_string());
+        let status = map_error(err);
+        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+    }
+}
