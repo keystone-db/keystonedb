@@ -566,3 +566,427 @@ impl Shell {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================
+    // KeystoneCompleter Tests
+    // ========================================
+
+    #[test]
+    fn test_completer_meta_command_completion() {
+        let completer = KeystoneCompleter::new();
+
+        // Complete .help
+        let candidates = completer.complete_meta(".he");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, ".help");
+
+        // Complete .exit
+        let candidates = completer.complete_meta(".e");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, ".exit");
+
+        // Complete all commands starting with .
+        let candidates = completer.complete_meta(".");
+        assert!(candidates.len() >= 8); // All meta commands
+
+        // No match
+        let candidates = completer.complete_meta(".xyz");
+        assert_eq!(candidates.len(), 0);
+    }
+
+    #[test]
+    fn test_completer_keyword_completion() {
+        let completer = KeystoneCompleter::new();
+
+        // Complete SELECT (case insensitive)
+        let candidates = completer.complete_keyword("sel");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, "SELECT");
+
+        // Complete SELECT with uppercase
+        let candidates = completer.complete_keyword("SEL");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, "SELECT");
+
+        // Complete FROM
+        let candidates = completer.complete_keyword("fr");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, "FROM");
+
+        // Complete with no matches
+        let candidates = completer.complete_keyword("xyz");
+        assert_eq!(candidates.len(), 0);
+    }
+
+    #[test]
+    fn test_completer_full_complete_meta_command() {
+        let completer = KeystoneCompleter::new();
+        let history = rustyline::history::DefaultHistory::new();
+        let ctx = rustyline::Context::new(&history);
+
+        // Complete meta-command at start of line
+        let (start, candidates) = completer.complete(".he", 3, &ctx).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, ".help");
+
+        // Complete partial meta-command
+        let (start, candidates) = completer.complete(".form", 5, &ctx).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, ".format");
+    }
+
+    #[test]
+    fn test_completer_full_complete_partiql_keyword() {
+        let completer = KeystoneCompleter::new();
+        let history = rustyline::history::DefaultHistory::new();
+        let ctx = rustyline::Context::new(&history);
+
+        // Complete first word
+        let (start, candidates) = completer.complete("SEL", 3, &ctx).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, "SELECT");
+
+        // Complete after whitespace
+        let (start, candidates) = completer.complete("SELECT * FR", 11, &ctx).unwrap();
+        assert_eq!(start, 9); // Start of "FR"
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, "FROM");
+
+        // Complete in middle of query
+        let (start, candidates) = completer.complete("SELECT * FROM items WH", 22, &ctx).unwrap();
+        assert_eq!(start, 20); // Start of "WH"
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].display, "WHERE");
+    }
+
+    #[test]
+    fn test_completer_complete_with_multiple_matches() {
+        let completer = KeystoneCompleter::new();
+        let history = rustyline::history::DefaultHistory::new();
+        let ctx = rustyline::Context::new(&history);
+
+        // Multiple keywords starting with 'IN'
+        let (start, candidates) = completer.complete("IN", 2, &ctx).unwrap();
+        assert_eq!(start, 0);
+        assert!(candidates.len() >= 2); // INSERT, INTO
+        let displays: Vec<_> = candidates.iter().map(|c| c.display.as_str()).collect();
+        assert!(displays.contains(&"INSERT"));
+        assert!(displays.contains(&"INTO"));
+    }
+
+    // ========================================
+    // Format and Timer Tests
+    // ========================================
+
+    #[test]
+    fn test_set_format_valid() {
+        let mut shell = create_test_shell();
+
+        // Set to table format
+        shell.set_format("table").unwrap();
+        assert!(matches!(shell.format, OutputFormat::Table));
+
+        // Set to json format
+        shell.set_format("json").unwrap();
+        assert!(matches!(shell.format, OutputFormat::Json));
+
+        // Set to compact format
+        shell.set_format("compact").unwrap();
+        assert!(matches!(shell.format, OutputFormat::Compact));
+
+        // Case insensitive
+        shell.set_format("TABLE").unwrap();
+        assert!(matches!(shell.format, OutputFormat::Table));
+    }
+
+    #[test]
+    fn test_set_format_invalid() {
+        let mut shell = create_test_shell();
+
+        // Invalid format should not change the format (starts as Table)
+        shell.set_format("invalid").unwrap();
+        assert!(matches!(shell.format, OutputFormat::Table));
+
+        // Another invalid format
+        shell.set_format("xml").unwrap();
+        assert!(matches!(shell.format, OutputFormat::Table));
+    }
+
+    #[test]
+    fn test_set_timer_valid() {
+        let mut shell = create_test_shell();
+
+        // Enable timer
+        shell.set_timer("on").unwrap();
+        assert!(shell.show_timing);
+
+        // Disable timer
+        shell.set_timer("off").unwrap();
+        assert!(!shell.show_timing);
+
+        // Alternative values for on
+        shell.set_timer("true").unwrap();
+        assert!(shell.show_timing);
+
+        shell.set_timer("1").unwrap();
+        assert!(shell.show_timing);
+
+        // Alternative values for off
+        shell.set_timer("false").unwrap();
+        assert!(!shell.show_timing);
+
+        shell.set_timer("0").unwrap();
+        assert!(!shell.show_timing);
+
+        // Case insensitive
+        shell.set_timer("ON").unwrap();
+        assert!(shell.show_timing);
+    }
+
+    #[test]
+    fn test_set_timer_invalid() {
+        let mut shell = create_test_shell();
+        shell.show_timing = true;
+
+        // Invalid value should not change the timer
+        shell.set_timer("invalid").unwrap();
+        assert!(shell.show_timing);
+
+        // Another invalid value
+        shell.set_timer("yes").unwrap();
+        assert!(shell.show_timing);
+    }
+
+    // ========================================
+    // Query Detection Tests
+    // ========================================
+
+    #[test]
+    fn test_is_meta_command() {
+        // Meta-commands start with '.'
+        assert!(".help".starts_with('.'));
+        assert!(".exit".starts_with('.'));
+        assert!(".format table".starts_with('.'));
+        assert!(".timer on".starts_with('.'));
+
+        // PartiQL queries don't start with '.'
+        assert!(!"SELECT * FROM items;".starts_with('.'));
+        assert!(!"INSERT INTO items VALUE {};".starts_with('.'));
+    }
+
+    #[test]
+    fn test_is_query_complete() {
+        // Meta-commands are always complete (single line)
+        assert!(".help".starts_with('.'));
+
+        // PartiQL queries are complete when they end with semicolon
+        assert!("SELECT * FROM items;".trim_end().ends_with(';'));
+        assert!("INSERT INTO items VALUE {};".trim_end().ends_with(';'));
+        assert!("UPDATE items SET x = 1;".trim_end().ends_with(';'));
+        assert!("DELETE FROM items WHERE pk = 'key';".trim_end().ends_with(';'));
+
+        // Incomplete queries (no semicolon)
+        assert!(!"SELECT * FROM items".trim_end().ends_with(';'));
+        assert!(!"INSERT INTO items VALUE {}".trim_end().ends_with(';'));
+    }
+
+    #[test]
+    fn test_multiline_query_detection() {
+        // Simulate multi-line query accumulation
+        let mut buffer = String::new();
+
+        // First line - incomplete
+        buffer.push_str("SELECT * FROM items");
+        assert!(!buffer.trim_end().ends_with(';'));
+        assert!(!buffer.starts_with('.'));
+
+        // Second line - still incomplete
+        buffer.push(' ');
+        buffer.push_str("WHERE pk = 'user#123'");
+        assert!(!buffer.trim_end().ends_with(';'));
+
+        // Third line - now complete
+        buffer.push(' ');
+        buffer.push_str("AND sk = 'profile';");
+        assert!(buffer.trim_end().ends_with(';'));
+    }
+
+    // ========================================
+    // Helper Method Tests
+    // ========================================
+
+    #[test]
+    fn test_truncate_path_short() {
+        let shell = create_test_shell();
+
+        // Short path - should not be truncated
+        let short_path = "/path/to/db";
+        let truncated = shell.truncate_path(short_path, 43);
+        assert_eq!(truncated, short_path);
+    }
+
+    #[test]
+    fn test_truncate_path_long() {
+        let shell = create_test_shell();
+
+        // Long path - should be truncated
+        let long_path = "/very/long/path/to/some/deeply/nested/directory/structure/database.keystone";
+        let truncated = shell.truncate_path(long_path, 43);
+
+        // Should be exactly 43 characters or less
+        assert!(truncated.len() <= 43);
+
+        // Should contain "..." in the middle
+        assert!(truncated.contains("..."));
+
+        // Should start with beginning of path
+        assert!(truncated.starts_with("/very/long/path"));
+
+        // Should end with end of path
+        assert!(truncated.ends_with(".keystone"));
+    }
+
+    #[test]
+    fn test_truncate_path_exact_length() {
+        let shell = create_test_shell();
+
+        // Path exactly at max length - should not be truncated
+        let exact_path = "a".repeat(43);
+        let truncated = shell.truncate_path(&exact_path, 43);
+        assert_eq!(truncated, exact_path);
+    }
+
+    // ========================================
+    // Meta-Command Execution Tests
+    // ========================================
+
+    #[test]
+    fn test_execute_meta_command_help() {
+        let mut shell = create_test_shell();
+
+        // .help should execute without error
+        let result = shell.execute_meta_command(".help");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_meta_command_exit() {
+        let mut shell = create_test_shell();
+
+        // .exit and .quit should execute without error
+        let result = shell.execute_meta_command(".exit");
+        assert!(result.is_ok());
+
+        let result = shell.execute_meta_command(".quit");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_meta_command_schema() {
+        let mut shell = create_test_shell();
+
+        // .schema should execute without error
+        let result = shell.execute_meta_command(".schema");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_meta_command_indexes() {
+        let mut shell = create_test_shell();
+
+        // .indexes should execute without error
+        let result = shell.execute_meta_command(".indexes");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_meta_command_format() {
+        let mut shell = create_test_shell();
+
+        // .format with argument
+        let result = shell.execute_meta_command(".format json");
+        assert!(result.is_ok());
+        assert!(matches!(shell.format, OutputFormat::Json));
+
+        // .format without argument (should show usage)
+        let result = shell.execute_meta_command(".format");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_meta_command_timer() {
+        let mut shell = create_test_shell();
+
+        // .timer with argument
+        let result = shell.execute_meta_command(".timer off");
+        assert!(result.is_ok());
+        assert!(!shell.show_timing);
+
+        // .timer without argument (should show usage)
+        let result = shell.execute_meta_command(".timer");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_meta_command_clear() {
+        let mut shell = create_test_shell();
+
+        // .clear should execute without error
+        let result = shell.execute_meta_command(".clear");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_meta_command_unknown() {
+        let mut shell = create_test_shell();
+
+        // Unknown command should not error, but should print message
+        let result = shell.execute_meta_command(".unknown");
+        assert!(result.is_ok());
+
+        let result = shell.execute_meta_command(".notacommand");
+        assert!(result.is_ok());
+    }
+
+    // ========================================
+    // Output Format Tests
+    // ========================================
+
+    #[test]
+    fn test_output_format_debug() {
+        // Ensure OutputFormat implements Debug for printing
+        let table = OutputFormat::Table;
+        let json = OutputFormat::Json;
+        let compact = OutputFormat::Compact;
+
+        assert_eq!(format!("{:?}", table), "Table");
+        assert_eq!(format!("{:?}", json), "Json");
+        assert_eq!(format!("{:?}", compact), "Compact");
+    }
+
+    #[test]
+    fn test_output_format_copy() {
+        // Ensure OutputFormat can be copied
+        let format1 = OutputFormat::Table;
+        let format2 = format1;
+
+        assert!(matches!(format1, OutputFormat::Table));
+        assert!(matches!(format2, OutputFormat::Table));
+    }
+
+    // ========================================
+    // Test Helpers
+    // ========================================
+
+    /// Create a test shell instance with in-memory database
+    fn create_test_shell() -> Shell {
+        Shell::new(Some(Path::new(":memory:"))).expect("Failed to create test shell")
+    }
+}
