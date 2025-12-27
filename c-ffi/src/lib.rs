@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_double, c_int, c_uint};
 use std::ptr;
-use std::sync::Mutex;
+
+use parking_lot::Mutex;
 
 use kstone_api::{
     BatchGetRequest, BatchWriteRequest, Database, ItemBuilder, Query, Scan, Update,
@@ -44,13 +45,13 @@ pub const KSTONE_ERR_INTERNAL: c_int = -10;
 
 fn set_error(code: i32, message: String) {
     LAST_ERROR.with(|e| {
-        *e.lock().unwrap() = Some((code, message));
+        *e.lock() = Some((code, message));
     });
 }
 
 fn clear_error() {
     LAST_ERROR.with(|e| {
-        *e.lock().unwrap() = None;
+        *e.lock() = None;
     });
 }
 
@@ -165,9 +166,19 @@ pub struct KstoneBatchGetResponse {
 #[no_mangle]
 pub extern "C" fn kstone_last_error() -> *mut c_char {
     LAST_ERROR.with(|e| {
-        let guard = e.lock().unwrap();
+        let guard = e.lock();
         match &*guard {
-            Some((_, msg)) => CString::new(msg.as_str()).unwrap().into_raw(),
+            Some((_, msg)) => {
+                // If CString::new fails (contains null byte), return a safe error message
+                match CString::new(msg.as_str()) {
+                    Ok(cstr) => cstr.into_raw(),
+                    Err(_) => {
+                        // Error message contains null byte, sanitize it
+                        let sanitized = msg.replace('\0', "");
+                        CString::new(sanitized).unwrap_or_else(|_| CString::new("Error message contains invalid data").unwrap()).into_raw()
+                    }
+                }
+            }
             None => ptr::null_mut(),
         }
     })
@@ -177,7 +188,7 @@ pub extern "C" fn kstone_last_error() -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn kstone_last_error_code() -> c_int {
     LAST_ERROR.with(|e| {
-        let guard = e.lock().unwrap();
+        let guard = e.lock();
         match &*guard {
             Some((code, _)) => *code,
             None => KSTONE_OK,
@@ -679,7 +690,10 @@ pub unsafe extern "C" fn kstone_item_get_string(
 
     match (*item).inner.get(key_str) {
         Some(kstone_api::KeystoneValue::S(s)) => {
-            CString::new(s.as_str()).unwrap().into_raw()
+            match CString::new(s.as_str()) {
+                Ok(cstr) => cstr.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
         }
         _ => ptr::null_mut(),
     }
@@ -818,7 +832,10 @@ pub unsafe extern "C" fn kstone_item_to_json(item: *const KstoneItem) -> *mut c_
         .collect();
 
     match serde_json::to_string(&serde_json::Value::Object(json_map)) {
-        Ok(s) => CString::new(s).unwrap().into_raw(),
+        Ok(s) => match CString::new(s) {
+            Ok(cstr) => cstr.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
         Err(_) => ptr::null_mut(),
     }
 }
@@ -1215,8 +1232,11 @@ pub unsafe extern "C" fn kstone_db_query(
             let has_more = response.last_key.is_some();
             let (last_pk, last_sk) = match response.last_key {
                 Some((pk, sk)) => {
-                    let pk_str = CString::new(pk.to_vec()).unwrap().into_raw();
-                    let sk_str = sk.map(|s| CString::new(s.to_vec()).unwrap().into_raw())
+                    let pk_str = CString::new(pk.to_vec())
+                        .map(|c| c.into_raw())
+                        .unwrap_or(ptr::null_mut());
+                    let sk_str = sk.and_then(|s| CString::new(s.to_vec()).ok())
+                        .map(|c| c.into_raw())
                         .unwrap_or(ptr::null_mut());
                     (pk_str, sk_str)
                 }
@@ -1370,8 +1390,11 @@ pub unsafe extern "C" fn kstone_db_scan(
             let has_more = response.last_key.is_some();
             let (last_pk, last_sk) = match response.last_key {
                 Some((pk, sk)) => {
-                    let pk_str = CString::new(pk.to_vec()).unwrap().into_raw();
-                    let sk_str = sk.map(|s| CString::new(s.to_vec()).unwrap().into_raw())
+                    let pk_str = CString::new(pk.to_vec())
+                        .map(|c| c.into_raw())
+                        .unwrap_or(ptr::null_mut());
+                    let sk_str = sk.and_then(|s| CString::new(s.to_vec()).ok())
+                        .map(|c| c.into_raw())
                         .unwrap_or(ptr::null_mut());
                     (pk_str, sk_str)
                 }
@@ -1454,10 +1477,23 @@ pub unsafe extern "C" fn kstone_db_execute_sql(
                         "success": success
                     })
                 }
+                _ => {
+                    // Handle any future response types
+                    serde_json::json!({
+                        "type": "unknown",
+                        "success": false
+                    })
+                }
             };
 
             match serde_json::to_string(&json) {
-                Ok(s) => CString::new(s).unwrap().into_raw(),
+                Ok(s) => match CString::new(s) {
+                    Ok(cstr) => cstr.into_raw(),
+                    Err(_) => {
+                        set_error(KSTONE_ERR_INTERNAL, "JSON contains null byte".to_string());
+                        ptr::null_mut()
+                    }
+                },
                 Err(e) => {
                     set_error(KSTONE_ERR_INTERNAL, format!("JSON serialization failed: {}", e));
                     ptr::null_mut()
@@ -1537,7 +1573,13 @@ pub unsafe extern "C" fn kstone_db_batch_get(
             });
 
             match serde_json::to_string(&json) {
-                Ok(s) => CString::new(s).unwrap().into_raw(),
+                Ok(s) => match CString::new(s) {
+                    Ok(cstr) => cstr.into_raw(),
+                    Err(_) => {
+                        set_error(KSTONE_ERR_INTERNAL, "JSON contains null byte".to_string());
+                        ptr::null_mut()
+                    }
+                },
                 Err(e) => {
                     set_error(KSTONE_ERR_INTERNAL, format!("JSON serialization failed: {}", e));
                     ptr::null_mut()
@@ -1657,7 +1699,7 @@ mod tests {
         let version = kstone_version();
         assert!(!version.is_null());
         unsafe {
-            let version_str = CStr::from_ptr(version).to_str().unwrap();
+            let version_str = CStr::from_ptr(version).to_str().unwrap_or("<invalid utf-8>");
             assert_eq!(version_str, "0.1.0");
         }
     }
@@ -1673,7 +1715,7 @@ mod tests {
         let msg = kstone_last_error();
         assert!(!msg.is_null());
         unsafe {
-            let msg_str = CStr::from_ptr(msg).to_str().unwrap();
+            let msg_str = CStr::from_ptr(msg).to_str().unwrap_or("<invalid utf-8>");
             assert_eq!(msg_str, "test error");
             kstone_string_free(msg);
         }
@@ -1705,7 +1747,7 @@ mod tests {
             let name_key = CString::new("name").unwrap();
             let name_value = kstone_item_get_string(item, name_key.as_ptr());
             assert!(!name_value.is_null());
-            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap(), "Alice");
+            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap_or("<invalid utf-8>"), "Alice");
             kstone_string_free(name_value);
 
             let age_key = CString::new("age").unwrap();
@@ -1731,7 +1773,7 @@ mod tests {
             assert!(!json_out.is_null());
 
             // Parse and verify
-            let json_str = CStr::from_ptr(json_out).to_str().unwrap();
+            let json_str = CStr::from_ptr(json_out).to_str().unwrap_or("<invalid utf-8>");
             let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
             assert_eq!(parsed["name"], "Bob");
             assert_eq!(parsed["age"], 25);
@@ -1768,7 +1810,7 @@ mod tests {
             // Verify
             let name_value = kstone_item_get_string(retrieved, key.as_ptr());
             assert!(!name_value.is_null());
-            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap(), "Test");
+            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap_or("<invalid utf-8>"), "Test");
 
             kstone_string_free(name_value);
             kstone_item_free(retrieved);
@@ -1788,7 +1830,7 @@ mod tests {
 
             let err_msg = kstone_last_error();
             assert!(!err_msg.is_null());
-            let msg_str = CStr::from_ptr(err_msg).to_str().unwrap();
+            let msg_str = CStr::from_ptr(err_msg).to_str().unwrap_or("<invalid utf-8>");
             assert!(msg_str.contains("Path traversal not allowed"));
             kstone_string_free(err_msg);
 
