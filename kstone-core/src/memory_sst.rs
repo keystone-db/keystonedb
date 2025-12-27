@@ -5,8 +5,9 @@
 
 use crate::{Record, Result, Key, bloom::BloomFilter};
 use bytes::Bytes;
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// In-memory SST writer
 pub struct MemorySstWriter {
@@ -137,31 +138,31 @@ impl MemorySstStore {
 
     /// Store an SST
     pub fn store(&self, name: impl Into<String>, sst: MemorySstReader) {
-        let mut ssts = self.ssts.lock().unwrap();
+        let mut ssts = self.ssts.lock();
         ssts.insert(name.into(), sst);
     }
 
     /// Retrieve an SST by name
     pub fn get(&self, name: &str) -> Option<MemorySstReader> {
-        let ssts = self.ssts.lock().unwrap();
+        let ssts = self.ssts.lock();
         ssts.get(name).cloned()
     }
 
     /// Delete an SST by name
     pub fn delete(&self, name: &str) -> bool {
-        let mut ssts = self.ssts.lock().unwrap();
+        let mut ssts = self.ssts.lock();
         ssts.remove(name).is_some()
     }
 
     /// List all SST names
     pub fn list_names(&self) -> Vec<String> {
-        let ssts = self.ssts.lock().unwrap();
+        let ssts = self.ssts.lock();
         ssts.keys().cloned().collect()
     }
 
     /// Get the number of SSTs
     pub fn len(&self) -> usize {
-        let ssts = self.ssts.lock().unwrap();
+        let ssts = self.ssts.lock();
         ssts.len()
     }
 
@@ -172,7 +173,7 @@ impl MemorySstStore {
 
     /// Clear all SSTs
     pub fn clear(&self) {
-        let mut ssts = self.ssts.lock().unwrap();
+        let mut ssts = self.ssts.lock();
         ssts.clear();
     }
 }

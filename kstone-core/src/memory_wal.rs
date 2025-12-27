@@ -4,7 +4,8 @@
 /// All data is lost when the MemoryWal is dropped.
 
 use crate::{Record, Result};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// Log Sequence Number (LSN) - monotonically increasing record ID
 pub type Lsn = u64;
@@ -40,7 +41,7 @@ impl MemoryWal {
 
     /// Append a record to the WAL
     pub fn append(&self, record: Record) -> Result<Lsn> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         let lsn = inner.next_lsn;
         inner.next_lsn += 1;
         inner.records.push((lsn, record));
@@ -54,25 +55,25 @@ impl MemoryWal {
 
     /// Read all records from the WAL
     pub fn read_all(&self) -> Result<Vec<(Lsn, Record)>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         Ok(inner.records.clone())
     }
 
     /// Get the next LSN that will be assigned
     pub fn next_lsn(&self) -> Lsn {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.next_lsn
     }
 
     /// Clear all records (useful for testing)
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         inner.records.clear();
     }
 
     /// Get the number of records in the WAL
     pub fn len(&self) -> usize {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.records.len()
     }
 

@@ -189,10 +189,12 @@ impl TableSchema {
         if let Some(ttl_attr) = &self.ttl_attribute_name {
             if let Some(ttl_value) = item.get(ttl_attr) {
                 // Get current time in seconds since epoch
+                // If system clock fails (e.g., goes backward), default to 0 (not expired)
+                // This is safer than panicking and prevents accidental deletion of items
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64;
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
 
                 // Extract expiration timestamp from item
                 let expires_at = match ttl_value {
@@ -421,7 +423,7 @@ mod tests {
         // Item expired 100 seconds ago
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("System time should be after UNIX_EPOCH")
             .as_secs() as i64;
         let expired_time = now - 100;
 
@@ -442,7 +444,7 @@ mod tests {
         // Item expires 100 seconds in the future
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("System time should be after UNIX_EPOCH")
             .as_secs() as i64;
         let future_time = now + 100;
 
@@ -491,7 +493,7 @@ mod tests {
         // Item with Timestamp value type (milliseconds)
         let now_millis = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .expect("System time should be after UNIX_EPOCH")
             .as_millis() as i64;
         let expired_millis = now_millis - 100_000; // 100 seconds ago
 

@@ -524,27 +524,68 @@ pub struct ItemBuilder {
 }
 
 impl ItemBuilder {
+    /// Create a new ItemBuilder
     pub fn new() -> Self {
         Self {
             item: HashMap::new(),
         }
     }
 
+    /// Set a string attribute
     pub fn string(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.item.insert(key.into(), Value::string(value.into()));
         self
     }
 
+    /// Set a number attribute
     pub fn number(mut self, key: impl Into<String>, value: impl ToString) -> Self {
         self.item.insert(key.into(), Value::number(value));
         self
     }
 
+    /// Set a boolean attribute
     pub fn bool(mut self, key: impl Into<String>, value: bool) -> Self {
         self.item.insert(key.into(), Value::Bool(value));
         self
     }
 
+    /// Set a null attribute
+    pub fn null(mut self, key: impl Into<String>) -> Self {
+        self.item.insert(key.into(), Value::Null);
+        self
+    }
+
+    /// Set a binary attribute
+    pub fn binary(mut self, key: impl Into<String>, bytes: impl Into<Bytes>) -> Self {
+        self.item.insert(key.into(), Value::binary(bytes));
+        self
+    }
+
+    /// Set a list attribute
+    pub fn list(mut self, key: impl Into<String>, values: Vec<Value>) -> Self {
+        self.item.insert(key.into(), Value::L(values));
+        self
+    }
+
+    /// Set a map attribute
+    pub fn map(mut self, key: impl Into<String>, map: HashMap<String, Value>) -> Self {
+        self.item.insert(key.into(), Value::map(map));
+        self
+    }
+
+    /// Set a timestamp attribute (milliseconds since epoch)
+    pub fn timestamp(mut self, key: impl Into<String>, millis: i64) -> Self {
+        self.item.insert(key.into(), Value::timestamp(millis));
+        self
+    }
+
+    /// Set a vector of f32 values (for embeddings/vector search)
+    pub fn vector_f32(mut self, key: impl Into<String>, values: Vec<f32>) -> Self {
+        self.item.insert(key.into(), Value::vector(values));
+        self
+    }
+
+    /// Build the final Item
     pub fn build(self) -> Item {
         self.item
     }
@@ -1947,6 +1988,68 @@ mod tests {
         // Verify it's the most recent records
         assert_eq!(records[0].sequence_number, 6);
         assert_eq!(records[4].sequence_number, 10);
+    }
+
+    #[test]
+    fn test_item_builder_all_value_types() {
+        use std::collections::HashMap;
+
+        // Test all ItemBuilder methods
+        let mut nested_map = HashMap::new();
+        nested_map.insert("nested_key".to_string(), Value::string("nested_value"));
+
+        let item = ItemBuilder::new()
+            .string("str_field", "hello")
+            .number("num_field", 42)
+            .bool("bool_field", true)
+            .null("null_field")
+            .binary("bin_field", vec![0u8, 1, 2, 3])
+            .list("list_field", vec![Value::string("a"), Value::number(1)])
+            .map("map_field", nested_map.clone())
+            .timestamp("ts_field", 1234567890)
+            .vector_f32("vec_field", vec![1.0, 2.0, 3.0])
+            .build();
+
+        // Verify all fields
+        assert_eq!(item.get("str_field").unwrap().as_string(), Some("hello"));
+
+        match item.get("num_field").unwrap() {
+            Value::N(n) => assert_eq!(n, "42"),
+            _ => panic!("Expected number"),
+        }
+
+        assert_eq!(item.get("bool_field").unwrap(), &Value::Bool(true));
+        assert_eq!(item.get("null_field").unwrap(), &Value::Null);
+
+        match item.get("bin_field").unwrap() {
+            Value::B(b) => assert_eq!(b.as_ref(), &[0u8, 1, 2, 3]),
+            _ => panic!("Expected binary"),
+        }
+
+        match item.get("list_field").unwrap() {
+            Value::L(list) => {
+                assert_eq!(list.len(), 2);
+                assert_eq!(list[0].as_string(), Some("a"));
+            }
+            _ => panic!("Expected list"),
+        }
+
+        match item.get("map_field").unwrap() {
+            Value::M(map) => {
+                assert_eq!(map.get("nested_key").unwrap().as_string(), Some("nested_value"));
+            }
+            _ => panic!("Expected map"),
+        }
+
+        match item.get("ts_field").unwrap() {
+            Value::Ts(ts) => assert_eq!(*ts, 1234567890),
+            _ => panic!("Expected timestamp"),
+        }
+
+        match item.get("vec_field").unwrap() {
+            Value::VecF32(vec) => assert_eq!(vec, &vec![1.0, 2.0, 3.0]),
+            _ => panic!("Expected vector"),
+        }
     }
 }
 
