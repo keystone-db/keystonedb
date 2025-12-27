@@ -205,9 +205,20 @@ pub extern "C" fn kstone_last_error() -> *mut c_char {
                 match CString::new(msg.as_str()) {
                     Ok(cstr) => cstr.into_raw(),
                     Err(_) => {
-                        // Error message contains null byte, sanitize it
+                        // Error message contains null byte, sanitize it by removing all null bytes
                         let sanitized = msg.replace('\0', "");
-                        CString::new(sanitized).unwrap_or_else(|_| CString::new("Error message contains invalid data").unwrap()).into_raw()
+                        // After sanitization, this should always succeed, but we handle the error case
+                        match CString::new(sanitized) {
+                            Ok(cstr) => cstr.into_raw(),
+                            Err(_) => {
+                                // Extremely unlikely: sanitized string still has issues
+                                // Return a simple ASCII fallback message
+                                match CString::new("Error") {
+                                    Ok(cstr) => cstr.into_raw(),
+                                    Err(_) => ptr::null_mut(),  // Should never happen with ASCII literal
+                                }
+                            }
+                        }
                     }
                 }
             }
