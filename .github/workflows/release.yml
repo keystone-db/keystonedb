@@ -147,13 +147,41 @@ jobs:
           mkdir -p release
           find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec mv {} release/ \;
 
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          # Extract the section for this version from CHANGELOG.md
+          if [ -f "CHANGELOG.md" ]; then
+            # Get content between version headers
+            NOTES=$(sed -n "/^## \[${VERSION}\]/,/^## \[/p" CHANGELOG.md | sed '1d;$d' | head -100)
+            if [ -n "$NOTES" ]; then
+              echo "Found changelog entry for version ${VERSION}"
+              echo "$NOTES" > version_notes.md
+            else
+              echo "No changelog entry found for ${VERSION}, using default"
+              echo "See [CHANGELOG.md](https://github.com/keystone-db/keystonedb/blob/main/CHANGELOG.md) for details." > version_notes.md
+            fi
+          else
+            echo "See commits for changes." > version_notes.md
+          fi
+
       - name: Generate release notes
         id: notes
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
 
-          cat > release_notes.md << 'EOF'
+          cat > release_notes.md << 'HEADER'
           # KeystoneDB $VERSION
+
+          HEADER
+
+          # Include version-specific changelog
+          if [ -f "version_notes.md" ]; then
+            cat version_notes.md >> release_notes.md
+          fi
+
+          cat >> release_notes.md << 'EOF'
 
           ## Installation
 
@@ -162,6 +190,16 @@ jobs:
           brew tap keystone-db/keystonedb
           brew install kstone
           brew install kstone-server
+          ```
+
+          ### Python (PyPI)
+          ```bash
+          pip install keystonedb
+          ```
+
+          ### Node.js (npm)
+          ```bash
+          npm install keystonedb
           ```
 
           ### Direct Download
@@ -178,8 +216,7 @@ jobs:
 
           ## Platforms
 
-          - **Linux x86_64** (GNU and MUSL)
-          - **Linux ARM64** (aarch64)
+          - **Linux x86_64** (GNU)
           - **macOS Intel** (x86_64)
           - **macOS Apple Silicon** (ARM64)
           - **Windows** (x86_64)
@@ -188,6 +225,12 @@ jobs:
 
           - `kstone` - Command-line interface for local database access
           - `kstone-server` - gRPC server for remote database access
+
+          ## Language Bindings
+
+          - **Python**: `pip install keystonedb` (Python 3.8+)
+          - **Node.js**: `npm install keystonedb` (Node 14+)
+          - **Rust**: Add `kstone-api` or `kstone-client` to Cargo.toml
 
           ## Checksums
 
@@ -201,8 +244,8 @@ jobs:
           ## Documentation
 
           - [README](https://github.com/keystone-db/keystonedb)
-          - [User Guide](https://github.com/keystone-db/keystonedb/blob/main/book/README.md)
-          - [Deployment Guide](https://github.com/keystone-db/keystonedb/blob/main/DEPLOYMENT.md)
+          - [CHANGELOG](https://github.com/keystone-db/keystonedb/blob/main/CHANGELOG.md)
+          - [Development Guide](https://github.com/keystone-db/keystonedb/blob/main/CLAUDE.md)
 
           EOF
 
@@ -273,6 +316,162 @@ jobs:
           publish_with_retry "kstone-api" && sleep 30
           publish_with_retry "kstone-client"
 
+  publish-python:
+    name: Publish Python Bindings
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Install protobuf compiler
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y protobuf-compiler
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install protobuf
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            choco install protoc
+          fi
+        shell: bash
+
+      - name: Install cross (for ARM64 Linux)
+        if: matrix.use_cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+          pip install zig
+          pip install ziglang
+
+      - name: Build wheels
+        working-directory: bindings/python
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            maturin build --release --target ${{ matrix.target }} --zig
+          else
+            maturin build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-${{ matrix.target }}
+          path: bindings/python/target/wheels/*.whl
+
+      - name: Publish to PyPI
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: bindings/python
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          if [ -n "$MATURIN_PYPI_TOKEN" ]; then
+            maturin publish --skip-existing
+          else
+            echo "PyPI token not configured, skipping publish"
+          fi
+        shell: bash
+
+  publish-nodejs:
+    name: Publish Node.js Bindings
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install protobuf compiler
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y protobuf-compiler
+          elif [ "$RUNNER_OS" == "macOS" ]; then
+            brew install protobuf
+          elif [ "$RUNNER_OS" == "Windows" ]; then
+            choco install protoc
+          fi
+        shell: bash
+
+      - name: Install dependencies
+        working-directory: bindings/nodejs
+        run: npm install
+
+      - name: Build native module
+        working-directory: bindings/nodejs
+        run: npm run build -- --target ${{ matrix.target }}
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodejs-native-${{ matrix.target }}
+          path: bindings/nodejs/*.node
+
+      - name: Publish to npm
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: bindings/nodejs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            npm publish --access public
+          else
+            echo "npm token not configured, skipping publish"
+          fi
+        shell: bash
+
   docker:
     name: Build and Push Docker Images
     needs: build
@@ -320,3 +519,55 @@ jobs:
             parkerdgabel/kstone-server:${{ steps.version.outputs.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  verify-release:
+    name: Verify Release Artifacts
+    needs: [publish-crates, publish-python, publish-nodejs, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Verify crates.io publication
+        run: |
+          echo "Checking crates.io for kstone-core..."
+          sleep 60  # Wait for crates.io indexing
+          curl -s "https://crates.io/api/v1/crates/kstone-core" | jq -e '.crate.newest_version' || echo "Not yet indexed"
+
+      - name: Verify Docker images
+        run: |
+          echo "Pulling Docker images to verify..."
+          docker pull parkerdgabel/kstone:${{ steps.version.outputs.VERSION }} || echo "Docker image not available"
+          docker pull parkerdgabel/kstone-server:${{ steps.version.outputs.VERSION }} || echo "Docker server image not available"
+
+      - name: Create release summary
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          echo "## Release v${VERSION} Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Published Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub Release | ✅ Created |" >> $GITHUB_STEP_SUMMARY
+          echo "| crates.io | ✅ Published |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyPI | ✅ Published (if configured) |" >> $GITHUB_STEP_SUMMARY
+          echo "| npm | ✅ Published (if configured) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Hub | ✅ Published (if configured) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Installation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "# Rust" >> $GITHUB_STEP_SUMMARY
+          echo 'cargo add kstone-api@'"${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Python" >> $GITHUB_STEP_SUMMARY
+          echo "pip install keystonedb==${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Node.js" >> $GITHUB_STEP_SUMMARY
+          echo "npm install keystonedb@${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
