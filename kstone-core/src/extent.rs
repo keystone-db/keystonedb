@@ -7,6 +7,9 @@ use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use crate::{Error, Result, layout::BLOCK_SIZE};
 
+/// Maximum extent size (1GB) to prevent excessive allocations
+const MAX_EXTENT_SIZE: u64 = 1024 * 1024 * 1024;
+
 /// Extent ID - unique identifier for an extent
 pub type ExtentId = u64;
 
@@ -25,13 +28,17 @@ impl Extent {
         Self { id, offset, size }
     }
 
-    pub fn end(&self) -> u64 {
-        self.offset + self.size
+    pub fn end(&self) -> Result<u64> {
+        self.offset.checked_add(self.size)
+            .ok_or_else(|| Error::Internal("Extent end offset overflow".into()))
     }
 
     /// Number of blocks in this extent
-    pub fn num_blocks(&self) -> u64 {
-        (self.size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64
+    pub fn num_blocks(&self) -> Result<u64> {
+        let block_size = BLOCK_SIZE as u64;
+        let numerator = self.size.checked_add(block_size.saturating_sub(1))
+            .ok_or_else(|| Error::Internal("Block count calculation overflow".into()))?;
+        Ok(numerator / block_size)
     }
 }
 
@@ -74,18 +81,29 @@ impl ExtentAllocator {
             return Err(Error::InvalidArgument("Extent size must be > 0".to_string()));
         }
 
+        if size > MAX_EXTENT_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Extent size {} exceeds maximum {}", size, MAX_EXTENT_SIZE)
+            ));
+        }
+
         let mut inner = self.inner.lock();
 
         let id = inner.next_id;
-        inner.next_id += 1;
+        inner.next_id = inner.next_id.checked_add(1)
+            .ok_or_else(|| Error::Internal("Extent ID overflow".into()))?;
 
         // Align size to block boundary
-        let aligned_size = align_to_block(size);
+        let aligned_size = align_to_block(size)?;
 
-        let offset = inner.base_offset + inner.allocated_end;
+        let offset = inner.base_offset.checked_add(inner.allocated_end)
+            .ok_or_else(|| Error::Internal("Extent offset overflow".into()))?;
+
         let extent = Extent::new(id, offset, aligned_size);
 
-        inner.allocated_end += aligned_size;
+        inner.allocated_end = inner.allocated_end.checked_add(aligned_size)
+            .ok_or_else(|| Error::Internal("Extent allocator overflow".into()))?;
+
         inner.extents.insert(id, extent);
 
         Ok(extent)
@@ -129,9 +147,13 @@ impl ExtentAllocator {
 }
 
 /// Align size to block boundary (round up)
-fn align_to_block(size: u64) -> u64 {
+fn align_to_block(size: u64) -> Result<u64> {
     let block_size = BLOCK_SIZE as u64;
-    ((size + block_size - 1) / block_size) * block_size
+    let numerator = size.checked_add(block_size.saturating_sub(1))
+        .ok_or_else(|| Error::Internal("Block alignment overflow".into()))?;
+    let blocks = numerator / block_size;
+    blocks.checked_mul(block_size)
+        .ok_or_else(|| Error::Internal("Aligned size overflow".into()))
 }
 
 #[cfg(test)]
@@ -140,11 +162,18 @@ mod tests {
 
     #[test]
     fn test_align_to_block() {
-        assert_eq!(align_to_block(0), 0);
-        assert_eq!(align_to_block(1), BLOCK_SIZE as u64);
-        assert_eq!(align_to_block(4096), BLOCK_SIZE as u64);
-        assert_eq!(align_to_block(4097), 2 * BLOCK_SIZE as u64);
-        assert_eq!(align_to_block(8192), 2 * BLOCK_SIZE as u64);
+        assert_eq!(align_to_block(0).unwrap(), 0);
+        assert_eq!(align_to_block(1).unwrap(), BLOCK_SIZE as u64);
+        assert_eq!(align_to_block(4096).unwrap(), BLOCK_SIZE as u64);
+        assert_eq!(align_to_block(4097).unwrap(), 2 * BLOCK_SIZE as u64);
+        assert_eq!(align_to_block(8192).unwrap(), 2 * BLOCK_SIZE as u64);
+    }
+
+    #[test]
+    fn test_align_to_block_overflow() {
+        // Test overflow protection
+        let result = align_to_block(u64::MAX);
+        assert!(matches!(result, Err(Error::Internal(_))));
     }
 
     #[test]
@@ -204,13 +233,53 @@ mod tests {
     #[test]
     fn test_extent_num_blocks() {
         let ext1 = Extent::new(1, 0, 4096);
-        assert_eq!(ext1.num_blocks(), 1);
+        assert_eq!(ext1.num_blocks().unwrap(), 1);
 
         let ext2 = Extent::new(2, 0, 8192);
-        assert_eq!(ext2.num_blocks(), 2);
+        assert_eq!(ext2.num_blocks().unwrap(), 2);
 
         let ext3 = Extent::new(3, 0, 5000);
-        assert_eq!(ext3.num_blocks(), 2); // 5000 bytes = 2 blocks
+        assert_eq!(ext3.num_blocks().unwrap(), 2); // 5000 bytes = 2 blocks
+    }
+
+    #[test]
+    fn test_extent_overflow_protection() {
+        let allocator = ExtentAllocator::new(0);
+
+        // Test maximum extent size limit
+        let result = allocator.allocate(MAX_EXTENT_SIZE + 1);
+        assert!(matches!(result, Err(Error::InvalidArgument(_))));
+
+        // Test allocated_end overflow
+        // Manually set allocated_end to near max, then try to allocate
+        let allocator_overflow = ExtentAllocator::new(0);
+        {
+            let mut inner = allocator_overflow.inner.lock();
+            inner.allocated_end = u64::MAX - 1000;
+        }
+        let result = allocator_overflow.allocate(8000); // Will overflow allocated_end
+        assert!(matches!(result, Err(Error::Internal(_))));
+
+        // Test base_offset + allocated_end overflow (after multiple allocations)
+        let allocator_base = ExtentAllocator::new(u64::MAX - 5000);
+        allocator_base.allocate(5000).unwrap(); // First allocation: 8192 bytes aligned
+        let result = allocator_base.allocate(1000); // Second allocation: base + 8192 overflows
+        assert!(matches!(result, Err(Error::Internal(_))));
+    }
+
+    #[test]
+    fn test_extent_id_overflow() {
+        let allocator = ExtentAllocator::new(0);
+
+        // Set next_id to near max
+        {
+            let mut inner = allocator.inner.lock();
+            inner.next_id = u64::MAX;
+        }
+
+        // This should fail due to ID overflow
+        let result = allocator.allocate(100);
+        assert!(matches!(result, Err(Error::Internal(_))));
     }
 
     #[test]
