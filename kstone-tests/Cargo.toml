@@ -19,6 +19,8 @@ tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 criterion.workspace = true
+proptest.workspace = true
+rand = "0.8"
 
 [[bench]]
 name = "database_bench"

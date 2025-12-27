@@ -47,6 +47,15 @@ cargo test -p kstone-core --lib lsm::tests::test_lsm_put_get
 # Run integration tests only
 cargo test -p kstone-tests
 
+# Run property-based tests
+cargo test -p kstone-tests --test property_tests
+
+# Run chaos/fault injection tests
+cargo test -p kstone-tests --test chaos_tests
+
+# Run long-running stability tests (ignored by default)
+cargo test -p kstone-tests --test stability_tests --ignored
+
 # Run sync integration tests (requires filesystem access)
 cargo test -p kstone-sync --test sync_integration_test
 
@@ -57,12 +66,52 @@ cargo bench -p kstone-tests
 cargo test --release
 ```
 
-### Key Test Files
-- `kstone-tests/tests/integration_test.rs` - End-to-end API tests
-- `kstone-tests/tests/concurrent_access_test.rs` - Multi-threaded safety
-- `kstone-tests/tests/crash_recovery_test.rs` - WAL replay and durability
-- `kstone-tests/tests/large_dataset_test.rs` - Performance with large data
-- `kstone-sync/tests/sync_integration_test.rs` - Full sync workflow
+### Test Categories
+
+**Unit Tests** (~270 tests in kstone-core, ~80 in kstone-api)
+- Core storage engine components (LSM, WAL, SST, bloom filters)
+- Expression parsing and evaluation
+- Index operations (LSI/GSI)
+- PartiQL parser and translator
+
+**Integration Tests** (`kstone-tests/tests/`)
+- `integration_test.rs` - End-to-end API tests
+- `concurrent_access_test.rs` - Multi-threaded safety
+- `crash_recovery_test.rs` - WAL replay and durability
+- `durability_test.rs` - Write ordering and persistence
+- `edge_cases_test.rs` - Empty DB, large keys/values
+- `error_handling_test.rs` - Error codes and retryability
+- `large_dataset_test.rs` - Performance with large data
+- `wal_corruption_test.rs` - Corruption handling and recovery
+
+**Property-Based Tests** (`property_tests.rs`)
+Uses proptest for randomized invariant verification:
+- Put/get roundtrip for all value types
+- Delete removes items consistently
+- Overwrite replaces values correctly
+- Persistence survives reopen
+- Sort keys are independent
+- Bulk operations maintain consistency
+
+**Chaos Tests** (`chaos_tests.rs`)
+Fault injection and stress testing:
+- Truncated/corrupted SST file recovery
+- Missing WAL handling
+- Rapid open/close cycles
+- Concurrent readers and writers
+- Very long keys and large values
+- Memory pressure scenarios
+
+**Stability Tests** (`stability_tests.rs`)
+Long-running tests (run with `--ignored`):
+- Sustained mixed workload (1 minute)
+- Memory pressure under load
+- Recovery after 50K+ operations
+- Repeated open/close stress (100 cycles)
+
+**Sync Tests** (`kstone-sync/tests/`)
+- `sync_integration_test.rs` - Full sync workflow
+- `s3_test.rs` - S3 backend (requires credentials)
 
 ### CLI Usage
 ```bash
