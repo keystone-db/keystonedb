@@ -10,6 +10,7 @@ pub use kstone_core::{
     stream::{StreamRecord, StreamEventType, StreamViewType, StreamConfig},
     compaction::CompactionStats,
     DatabaseConfig,
+    fts::{TextIndex, Language, SearchResult, SearchHit, FtsQuery},
 };
 
 pub mod query;
@@ -130,6 +131,15 @@ impl Database {
     /// Open an existing database
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let engine = LsmEngine::open(path)?;
+        Ok(Self { engine: DatabaseEngine::Disk(engine) })
+    }
+
+    /// Open an existing database with a specific schema
+    ///
+    /// This is useful when schema isn't persisted in the manifest yet.
+    /// The caller must provide the same schema used when creating the database.
+    pub fn open_with_schema(path: impl AsRef<Path>, schema: TableSchema) -> Result<Self> {
+        let engine = LsmEngine::open_with_schema(path, schema)?;
         Ok(Self { engine: DatabaseEngine::Disk(engine) })
     }
 
@@ -474,6 +484,48 @@ impl Database {
     /// Optionally provide after_sequence_number to only get records after that sequence number.
     pub fn read_stream(&self, after_sequence_number: Option<u64>) -> Result<Vec<StreamRecord>> {
         self.disk_engine()?.read_stream(after_sequence_number)
+    }
+
+    /// Perform a full-text search (Phase 11+)
+    ///
+    /// # Arguments
+    /// * `index_name` - Name of the text index to search
+    /// * `query` - Search query string (supports boolean operators, phrases, fuzzy matching)
+    /// * `limit` - Maximum number of results to return
+    /// * `highlight` - Whether to include highlighted snippets in results
+    ///
+    /// # Returns
+    /// SearchResult containing matching documents ranked by relevance (BM25)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use kstone_api::{Database, TableSchema, TextIndex, Language};
+    ///
+    /// let schema = TableSchema::new()
+    ///     .with_text_index(TextIndex::new("content_idx", "content")
+    ///         .language(Language::English)
+    ///         .stemming(true));
+    ///
+    /// let db = Database::create_with_schema("mydb.keystone", schema).unwrap();
+    ///
+    /// // Search for documents
+    /// let results = db.text_search("content_idx", "quick brown fox", 10, true).unwrap();
+    ///
+    /// for hit in results.hits {
+    ///     println!("Key: {:?}, Score: {:.3}", hit.key, hit.score);
+    ///     if let Some(snippet) = hit.snippet {
+    ///         println!("Snippet: {}", snippet);
+    ///     }
+    /// }
+    /// ```
+    pub fn text_search(
+        &self,
+        index_name: &str,
+        query: &str,
+        limit: usize,
+        highlight: bool,
+    ) -> Result<SearchResult> {
+        self.disk_engine()?.text_search(index_name, query, limit, highlight)
     }
 
     /// Get database statistics

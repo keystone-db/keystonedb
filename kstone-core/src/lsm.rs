@@ -4,9 +4,14 @@ use crate::expression::{UpdateAction, UpdateExecutor, ExpressionContext, Expr, E
 use crate::index::{TableSchema, encode_index_key, decode_index_key};
 use crate::compaction::{CompactionManager, CompactionConfig, CompactionStatsAtomic};
 use crate::config::DatabaseConfig;
+use crate::fts::{
+    TextIndex, Tokenizer, FtsQuery, FtsQueryParser, Bm25Scorer, SearchResult, SearchHit,
+    SnippetExtractor, encode_fts_term_key, encode_fts_term_prefix, decode_fts_term_key, is_fts_key,
+    within_edit_distance,
+};
 use bytes::Bytes;
 use parking_lot::RwLock;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::fs;
@@ -267,8 +272,26 @@ impl LsmEngine {
 
         for (_lsn, record) in records {
             max_seq = max_seq.max(record.seq);
-            let key_enc = record.key.encode().to_vec();
-            let stripe_id = record.key.stripe() as usize;
+            let key_bytes = record.key.pk.as_ref();
+
+            // Check if this is an FTS key - FTS keys use term-based stripe routing
+            // and raw bytes as memtable key (not Key::encode())
+            let (stripe_id, key_enc) = if is_fts_key(key_bytes) {
+                // FTS keys: extract term and hash it for stripe selection
+                let stripe_id = if let Some((_, term)) = decode_fts_term_key(key_bytes) {
+                    let term_hash = crate::types::checksum::compute(term.as_bytes());
+                    (term_hash % 256) as usize
+                } else {
+                    // Fallback: use standard key stripe
+                    record.key.stripe() as usize
+                };
+                // FTS keys use raw pk bytes as memtable key (not encoded)
+                (stripe_id, key_bytes.to_vec())
+            } else {
+                // Regular keys: use standard stripe routing and encoded key
+                (record.key.stripe() as usize, record.key.encode().to_vec())
+            };
+
             stripes[stripe_id].memtable.insert(key_enc, record);
         }
 
@@ -284,6 +307,103 @@ impl LsmEngine {
                 compaction_config: CompactionConfig::default(),
                 compaction_stats: CompactionStatsAtomic::new(),
                 config: DatabaseConfig::default(), // TODO: Load from manifest in future
+            })),
+            path: dir.to_path_buf(),
+        })
+    }
+
+    /// Open an existing database with a specific schema
+    ///
+    /// This is useful when schema isn't persisted in the manifest yet.
+    /// The caller must provide the same schema used when creating the database.
+    pub fn open_with_schema(dir: impl AsRef<Path>, schema: TableSchema) -> Result<Self> {
+        let dir = dir.as_ref();
+        let wal_path = dir.join("wal.log");
+
+        let wal = Wal::open(&wal_path)?;
+
+        // Initialize 256 stripes
+        let mut stripes: Vec<Stripe> = (0..NUM_STRIPES).map(|_| Stripe::new()).collect();
+        let mut max_sst_id = 0u64;
+
+        // Load existing SSTs into appropriate stripes
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                if ext == "sst" {
+                    if let Some(stem) = path.file_stem() {
+                        if let Some(name) = stem.to_str() {
+                            // Parse filename: {stripe:03}-{sst_id}.sst or legacy {sst_id}.sst
+                            if let Some((stripe_str, id_str)) = name.split_once('-') {
+                                // New format: stripe-id
+                                if let (Ok(stripe), Ok(id)) = (stripe_str.parse::<usize>(), id_str.parse::<u64>()) {
+                                    if stripe < NUM_STRIPES {
+                                        max_sst_id = max_sst_id.max(id);
+                                        let reader = SstReader::open(&path)?;
+                                        stripes[stripe].ssts.push(reader);
+                                    }
+                                }
+                            } else {
+                                // Legacy format: just id (assign to stripe 0)
+                                if let Ok(id) = name.parse::<u64>() {
+                                    max_sst_id = max_sst_id.max(id);
+                                    let reader = SstReader::open(&path)?;
+                                    stripes[0].ssts.push(reader);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort SSTs within each stripe (newest first)
+        for stripe in &mut stripes {
+            stripe.ssts.reverse();
+        }
+
+        // Recover from WAL
+        let records = wal.read_all()?;
+        let mut max_seq = 0;
+
+        for (_lsn, record) in records {
+            max_seq = max_seq.max(record.seq);
+            let key_bytes = record.key.pk.as_ref();
+
+            // Check if this is an FTS key - FTS keys use term-based stripe routing
+            // and raw bytes as memtable key (not Key::encode())
+            let (stripe_id, key_enc) = if is_fts_key(key_bytes) {
+                // FTS keys: extract term and hash it for stripe selection
+                let stripe_id = if let Some((_, term)) = decode_fts_term_key(key_bytes) {
+                    let term_hash = crate::types::checksum::compute(term.as_bytes());
+                    (term_hash % 256) as usize
+                } else {
+                    // Fallback: use standard key stripe
+                    record.key.stripe() as usize
+                };
+                // FTS keys use raw pk bytes as memtable key (not encoded)
+                (stripe_id, key_bytes.to_vec())
+            } else {
+                // Regular keys: use standard stripe routing and encoded key
+                (record.key.stripe() as usize, record.key.encode().to_vec())
+            };
+
+            stripes[stripe_id].memtable.insert(key_enc, record);
+        }
+
+        Ok(Self {
+            inner: Arc::new(RwLock::new(LsmInner {
+                dir: dir.to_path_buf(),
+                wal,
+                stripes,
+                next_seq: max_seq + 1,
+                next_sst_id: max_sst_id + 1,
+                schema,
+                stream_buffer: std::collections::VecDeque::new(),
+                compaction_config: CompactionConfig::default(),
+                compaction_stats: CompactionStatsAtomic::new(),
+                config: DatabaseConfig::default(),
             })),
             path: dir.to_path_buf(),
         })
@@ -324,6 +444,11 @@ impl LsmEngine {
         // Materialize GSI entries (Phase 3.2+)
         if !inner.schema.global_indexes.is_empty() {
             self.materialize_gsi_entries(&mut inner, &key, &item)?;
+        }
+
+        // Materialize FTS entries (Phase 11+)
+        if !inner.schema.text_indexes.is_empty() {
+            self.materialize_fts_entries(&mut inner, &key, &item)?;
         }
 
         // Emit stream record (Phase 3.4+)
@@ -1038,6 +1163,136 @@ impl LsmEngine {
         Ok(())
     }
 
+    /// Materialize FTS (Full-Text Search) index entries (Phase 11+)
+    ///
+    /// For each text index, tokenizes the indexed attribute and creates
+    /// inverted index entries mapping terms to document keys.
+    fn materialize_fts_entries(&self, inner: &mut LsmInner, key: &Key, item: &Item) -> Result<()> {
+        // Clone the text_indexes to avoid borrow checker issues
+        let text_indexes: Vec<_> = inner.schema.text_indexes.clone();
+
+        for text_index in &text_indexes {
+            // Extract the text attribute value
+            if let Some(text_value) = item.get(&text_index.attribute) {
+                // Only index string values
+                let text = match text_value {
+                    Value::S(s) => s.as_str(),
+                    _ => continue,
+                };
+
+                // Tokenize the text
+                let tokenizer = Tokenizer::new(text_index);
+                let term_info = tokenizer.tokenize_with_frequency(text);
+                let doc_length = text.split_whitespace().count() as u32;
+
+                // Create a posting entry for this document
+                let doc_key_encoded = key.encode().to_vec();
+
+                // For each unique term, create/update an inverted index entry
+                for (term, info) in term_info {
+                    // Create the FTS index key: [FTS_MARKER | index_name | term | doc_key]
+                    // Including doc_key ensures each term-document pair has a unique key
+                    let fts_key_encoded = encode_fts_term_key(&text_index.name, &term, &doc_key_encoded);
+
+                    // Create posting data: stores the document key, frequency, positions, and doc length
+                    let posting_data = self.create_posting_value(
+                        &doc_key_encoded,
+                        info.frequency,
+                        &info.positions,
+                        doc_length,
+                    );
+
+                    // Create a synthetic Key for the FTS entry
+                    let fts_key = Key::new(Bytes::copy_from_slice(&fts_key_encoded));
+
+                    let seq = inner.next_seq;
+                    inner.next_seq += 1;
+
+                    // Create the FTS index record
+                    let fts_record = Record::put(fts_key.clone(), posting_data, seq);
+
+                    // Write to WAL
+                    inner.wal.append(fts_record.clone())?;
+
+                    // Add to memtable - use a hash of the term to select stripe
+                    let term_hash = crate::types::checksum::compute(term.as_bytes());
+                    let stripe_id = (term_hash % 256) as usize;
+                    inner.insert_into_memtable(stripe_id, fts_key_encoded, fts_record);
+                }
+            }
+        }
+
+        // Flush WAL to ensure FTS entries are persisted
+        inner.wal.flush()?;
+
+        Ok(())
+    }
+
+    /// Create a posting value for FTS index storage
+    fn create_posting_value(
+        &self,
+        doc_key: &[u8],
+        term_frequency: u32,
+        positions: &[u32],
+        doc_length: u32,
+    ) -> Item {
+        let mut item = Item::new();
+
+        // Store document key as binary
+        item.insert("dk".to_string(), Value::B(Bytes::copy_from_slice(doc_key)));
+
+        // Store term frequency
+        item.insert("tf".to_string(), Value::N(term_frequency.to_string()));
+
+        // Store positions as a list of numbers
+        let pos_list: Vec<Value> = positions.iter().map(|p| Value::N(p.to_string())).collect();
+        item.insert("pos".to_string(), Value::L(pos_list));
+
+        // Store document length
+        item.insert("dl".to_string(), Value::N(doc_length.to_string()));
+
+        item
+    }
+
+    /// Parse a posting value from FTS index storage
+    fn parse_posting_value(&self, item: &Item) -> Option<(Vec<u8>, u32, Vec<u32>, u32)> {
+        // Extract document key
+        let doc_key = match item.get("dk")? {
+            Value::B(b) => b.to_vec(),
+            _ => return None,
+        };
+
+        // Extract term frequency
+        let term_frequency = match item.get("tf")? {
+            Value::N(n) => n.parse::<u32>().ok()?,
+            _ => return None,
+        };
+
+        // Extract positions
+        let positions = match item.get("pos")? {
+            Value::L(list) => {
+                let mut pos = Vec::with_capacity(list.len());
+                for v in list {
+                    if let Value::N(n) = v {
+                        if let Ok(p) = n.parse::<u32>() {
+                            pos.push(p);
+                        }
+                    }
+                }
+                pos
+            }
+            _ => return None,
+        };
+
+        // Extract document length
+        let doc_length = match item.get("dl")? {
+            Value::N(n) => n.parse::<u32>().ok()?,
+            _ => return None,
+        };
+
+        Some((doc_key, term_frequency, positions, doc_length))
+    }
+
     /// Read stream records (Phase 3.4+)
     ///
     /// Returns all stream records in the buffer, ordered by sequence number (oldest first).
@@ -1077,6 +1332,485 @@ impl LsmEngine {
         while inner.stream_buffer.len() > inner.schema.stream_config.buffer_size {
             inner.stream_buffer.pop_front();
         }
+    }
+
+    // =========================================================================
+    // Full-Text Search (Phase 11+)
+    // =========================================================================
+
+    /// Perform a full-text search query (Phase 11+)
+    ///
+    /// # Arguments
+    /// * `index_name` - Name of the text index to search
+    /// * `query_str` - Search query string (supports boolean operators, phrases, fuzzy)
+    /// * `limit` - Maximum number of results to return
+    /// * `highlight` - Whether to include highlighted snippets
+    ///
+    /// # Returns
+    /// SearchResult with matching documents ranked by relevance (BM25)
+    pub fn text_search(
+        &self,
+        index_name: &str,
+        query_str: &str,
+        limit: usize,
+        highlight: bool,
+    ) -> Result<SearchResult> {
+        let start_time = std::time::Instant::now();
+        let inner = self.inner.read();
+
+        // Find the text index
+        let text_index = inner.schema.get_text_index(index_name)
+            .ok_or_else(|| Error::InvalidQuery(format!("Text index '{}' not found", index_name)))?
+            .clone();
+
+        // Parse the query
+        let tokenizer = Tokenizer::new(&text_index);
+        let parser = FtsQueryParser::new(tokenizer);
+        let query = parser.parse(query_str)?;
+
+        // Execute the search
+        let matching_docs = self.execute_fts_query(&inner, index_name, &query, &text_index)?;
+
+        // Calculate collection statistics for BM25
+        let (total_docs, avg_doc_length) = self.get_collection_stats(&inner);
+
+        // Score and rank results
+        let mut scored_hits = self.score_fts_results(
+            &inner,
+            index_name,
+            &query,
+            matching_docs,
+            total_docs,
+            avg_doc_length,
+            &text_index,
+        )?;
+
+        // Sort by score descending
+        scored_hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Calculate total before truncation
+        let total_hits = scored_hits.len() as u64;
+
+        // Apply limit
+        scored_hits.truncate(limit);
+
+        // Add highlighting if requested
+        if highlight {
+            self.add_highlights(&inner, &mut scored_hits, &text_index, &query)?;
+        }
+
+        let took_ms = start_time.elapsed().as_millis() as u64;
+
+        Ok(SearchResult {
+            total_hits,
+            hits: scored_hits,
+            took_ms,
+        })
+    }
+
+    /// Execute an FTS query and return matching document keys
+    fn execute_fts_query(
+        &self,
+        inner: &LsmInner,
+        index_name: &str,
+        query: &FtsQuery,
+        text_index: &TextIndex,
+    ) -> Result<HashSet<Vec<u8>>> {
+        match query {
+            FtsQuery::Term(term) => {
+                self.find_docs_for_term(inner, index_name, term)
+            }
+            FtsQuery::Phrase(terms) => {
+                self.find_docs_for_phrase(inner, index_name, terms, text_index)
+            }
+            FtsQuery::Boolean { left, op, right } => {
+                let left_docs = self.execute_fts_query(inner, index_name, left, text_index)?;
+                let right_docs = self.execute_fts_query(inner, index_name, right, text_index)?;
+
+                match op {
+                    crate::fts::BooleanOp::And => {
+                        Ok(left_docs.intersection(&right_docs).cloned().collect())
+                    }
+                    crate::fts::BooleanOp::Or => {
+                        Ok(left_docs.union(&right_docs).cloned().collect())
+                    }
+                    crate::fts::BooleanOp::Not => {
+                        Ok(left_docs.difference(&right_docs).cloned().collect())
+                    }
+                }
+            }
+            FtsQuery::Fuzzy { term, max_distance } => {
+                self.find_docs_for_fuzzy(inner, index_name, term, *max_distance as usize)
+            }
+            FtsQuery::Prefix(prefix) => {
+                self.find_docs_for_prefix(inner, index_name, prefix)
+            }
+            FtsQuery::Wildcard(pattern) => {
+                // Wildcard not fully implemented - treat as prefix for now
+                let prefix = pattern.trim_end_matches('*').trim_end_matches('?');
+                self.find_docs_for_prefix(inner, index_name, prefix)
+            }
+        }
+    }
+
+    /// Find all documents containing a specific term
+    fn find_docs_for_term(
+        &self,
+        inner: &LsmInner,
+        index_name: &str,
+        term: &str,
+    ) -> Result<HashSet<Vec<u8>>> {
+        let mut docs = HashSet::new();
+
+        // Build the FTS prefix key for this term (without doc_key)
+        let fts_prefix = encode_fts_term_prefix(index_name, term);
+
+        // Calculate the stripe for this term
+        let term_hash = crate::types::checksum::compute(term.as_bytes());
+        let stripe_id = (term_hash % 256) as usize;
+
+        // Search in the memtable first - scan all keys with the prefix
+        for (key_bytes, record) in inner.stripes[stripe_id].memtable.iter() {
+            if key_bytes.starts_with(&fts_prefix) {
+                if let Some(item) = &record.value {
+                    if let Some((doc_key, _, _, _)) = self.parse_posting_value(item) {
+                        docs.insert(doc_key);
+                    }
+                }
+            }
+        }
+
+        // Search in SST files - iterate and check prefix
+        // Note: FTS keys are stored in the Key.pk field directly (not length-prefixed)
+        for sst in &inner.stripes[stripe_id].ssts {
+            for record in sst.iter() {
+                // Use pk directly - that's where the FTS key bytes are stored
+                if record.key.pk.starts_with(&fts_prefix) {
+                    if let Some(item) = &record.value {
+                        if let Some((doc_key, _, _, _)) = self.parse_posting_value(item) {
+                            docs.insert(doc_key);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(docs)
+    }
+
+    /// Find documents matching a phrase query
+    fn find_docs_for_phrase(
+        &self,
+        inner: &LsmInner,
+        index_name: &str,
+        terms: &[String],
+        _text_index: &TextIndex,
+    ) -> Result<HashSet<Vec<u8>>> {
+        if terms.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        // First, find documents containing all terms
+        let mut candidate_docs = self.find_docs_for_term(inner, index_name, &terms[0])?;
+        for term in &terms[1..] {
+            let term_docs = self.find_docs_for_term(inner, index_name, term)?;
+            candidate_docs = candidate_docs.intersection(&term_docs).cloned().collect();
+        }
+
+        // For true phrase matching, we would need to check positions
+        // For now, we return documents containing all terms (AND semantics)
+        // A full implementation would verify position adjacency
+
+        Ok(candidate_docs)
+    }
+
+    /// Find documents with fuzzy matching
+    fn find_docs_for_fuzzy(
+        &self,
+        inner: &LsmInner,
+        index_name: &str,
+        term: &str,
+        max_distance: usize,
+    ) -> Result<HashSet<Vec<u8>>> {
+        let mut docs = HashSet::new();
+
+        // Scan all FTS keys for this index and check edit distance
+        // This is O(n) over all terms - a production implementation would use
+        // a more efficient data structure (e.g., BK-tree, SymSpell)
+
+        // Build the FTS index prefix (marker + index_name) to scan for all terms in this index
+        let index_prefix = {
+            let mut buf = Vec::new();
+            let index_name_bytes = index_name.as_bytes();
+            buf.push(crate::fts::FTS_INDEX_MARKER);
+            buf.extend_from_slice(&(index_name_bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(index_name_bytes);
+            buf
+        };
+
+        for stripe in &inner.stripes {
+            // Search memtable
+            for (key, record) in &stripe.memtable {
+                if key.starts_with(&index_prefix) {
+                    if let Some((_, stored_term)) = decode_fts_term_key(key) {
+                        if within_edit_distance(&stored_term, term, max_distance) {
+                            if let Some(item) = &record.value {
+                                if let Some((doc_key, _, _, _)) = self.parse_posting_value(item) {
+                                    docs.insert(doc_key);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Search SST files
+            for sst in &stripe.ssts {
+                for record in sst.iter() {
+                    if record.key.pk.starts_with(&index_prefix) {
+                        if let Some((_, stored_term)) = decode_fts_term_key(&record.key.pk) {
+                            if within_edit_distance(&stored_term, term, max_distance) {
+                                if let Some(item) = &record.value {
+                                    if let Some((doc_key, _, _, _)) = self.parse_posting_value(item) {
+                                        docs.insert(doc_key);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(docs)
+    }
+
+    /// Find documents matching a prefix
+    fn find_docs_for_prefix(
+        &self,
+        inner: &LsmInner,
+        index_name: &str,
+        prefix: &str,
+    ) -> Result<HashSet<Vec<u8>>> {
+        let mut docs = HashSet::new();
+
+        // Build the FTS index prefix (marker + index_name) to scan for all terms in this index
+        let index_prefix = {
+            let mut buf = Vec::new();
+            let index_name_bytes = index_name.as_bytes();
+            buf.push(crate::fts::FTS_INDEX_MARKER);
+            buf.extend_from_slice(&(index_name_bytes.len() as u32).to_le_bytes());
+            buf.extend_from_slice(index_name_bytes);
+            buf
+        };
+
+        // Scan all stripes for FTS keys in this index
+        for stripe in &inner.stripes {
+            // Search memtable
+            for (key, record) in stripe.memtable.iter() {
+                // Check if this is an FTS key for our index
+                if !key.starts_with(&index_prefix) {
+                    continue;
+                }
+
+                // Decode the term from the key
+                if let Some((decoded_index, decoded_term)) = crate::fts::decode_fts_term_key(key) {
+                    // Check if the term starts with our prefix
+                    if decoded_index == index_name && decoded_term.starts_with(prefix) {
+                        if let Some(item) = &record.value {
+                            if let Some((doc_key, _, _, _)) = self.parse_posting_value(item) {
+                                docs.insert(doc_key);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Search SST files
+            for sst in &stripe.ssts {
+                for record in sst.iter() {
+                    // FTS keys are stored directly in the pk field
+                    if !record.key.pk.starts_with(&index_prefix) {
+                        continue;
+                    }
+
+                    if let Some((decoded_index, decoded_term)) = crate::fts::decode_fts_term_key(&record.key.pk) {
+                        if decoded_index == index_name && decoded_term.starts_with(prefix) {
+                            if let Some(item) = &record.value {
+                                if let Some((doc_key, _, _, _)) = self.parse_posting_value(item) {
+                                    docs.insert(doc_key);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(docs)
+    }
+
+    /// Get collection statistics for BM25 scoring
+    fn get_collection_stats(&self, inner: &LsmInner) -> (u64, f64) {
+        // Count unique documents and compute average length
+        // This is a simplified version - a production system would cache these
+        let mut doc_count = 0u64;
+        let mut total_length = 0u64;
+
+        // Count base table records (non-index keys)
+        for stripe in &inner.stripes {
+            for (key, record) in &stripe.memtable {
+                // Skip index keys
+                if is_fts_key(key) || crate::index::is_index_key(key) {
+                    continue;
+                }
+                if record.value.is_some() {
+                    doc_count += 1;
+                    // Estimate doc length as number of attributes
+                    total_length += record.value.as_ref().map_or(0, |v| v.len()) as u64;
+                }
+            }
+        }
+
+        let avg_length = if doc_count > 0 {
+            total_length as f64 / doc_count as f64
+        } else {
+            1.0
+        };
+
+        (doc_count.max(1), avg_length.max(1.0))
+    }
+
+    /// Score search results using BM25
+    fn score_fts_results(
+        &self,
+        inner: &LsmInner,
+        index_name: &str,
+        query: &FtsQuery,
+        matching_docs: HashSet<Vec<u8>>,
+        total_docs: u64,
+        avg_doc_length: f64,
+        text_index: &TextIndex,
+    ) -> Result<Vec<SearchHit>> {
+        let scorer = Bm25Scorer::new(total_docs, avg_doc_length);
+        let mut hits = Vec::new();
+
+        // Extract query terms for scoring
+        let query_terms = self.extract_query_terms(query);
+
+        // Check if this is a prefix or fuzzy query (where we need special scoring)
+        let is_prefix_or_fuzzy = matches!(query, FtsQuery::Prefix(_) | FtsQuery::Fuzzy { .. } | FtsQuery::Wildcard(_));
+
+        for doc_key_bytes in matching_docs {
+            // Decode the document key
+            let doc_key = Key::decode(&doc_key_bytes)?;
+
+            let mut total_score = 0.0;
+            let mut matches: HashMap<String, Vec<u32>> = HashMap::new();
+
+            // Score each query term
+            for term in &query_terms {
+                // Now the key format includes doc_key
+                let fts_key = encode_fts_term_key(index_name, term, &doc_key_bytes);
+                let term_hash = crate::types::checksum::compute(term.as_bytes());
+                let stripe_id = (term_hash % 256) as usize;
+
+                // Get posting for this term-doc pair
+                if let Some(record) = inner.stripes[stripe_id].memtable.get(&fts_key) {
+                    if let Some(item) = &record.value {
+                        if let Some((_, tf, positions, dl)) = self.parse_posting_value(item) {
+                            // Count document frequency for this term
+                            let df = self.count_doc_frequency(inner, index_name, term);
+                            total_score += scorer.score(tf, df, dl);
+                            matches.insert(term.clone(), positions);
+                        }
+                    }
+                }
+            }
+
+            // For prefix/fuzzy queries, the document was found by matching a different term
+            // (e.g., "runner" matches prefix "run"), so give it a baseline score if no exact match
+            if total_score == 0.0 && is_prefix_or_fuzzy {
+                total_score = 1.0; // Baseline score for prefix/fuzzy matches
+            }
+
+            if total_score > 0.0 {
+                let mut hit = SearchHit::new(doc_key, total_score);
+                hit.matches = matches;
+                hits.push(hit);
+            }
+        }
+
+        Ok(hits)
+    }
+
+    /// Extract all terms from a query
+    fn extract_query_terms(&self, query: &FtsQuery) -> Vec<String> {
+        let mut terms = Vec::new();
+        self.collect_query_terms(query, &mut terms);
+        terms
+    }
+
+    fn collect_query_terms(&self, query: &FtsQuery, terms: &mut Vec<String>) {
+        match query {
+            FtsQuery::Term(t) => terms.push(t.clone()),
+            FtsQuery::Phrase(phrase_terms) => terms.extend(phrase_terms.clone()),
+            FtsQuery::Boolean { left, op: _, right } => {
+                self.collect_query_terms(left, terms);
+                self.collect_query_terms(right, terms);
+            }
+            FtsQuery::Fuzzy { term, .. } => terms.push(term.clone()),
+            FtsQuery::Prefix(p) => terms.push(p.clone()),
+            FtsQuery::Wildcard(w) => terms.push(w.trim_end_matches('*').trim_end_matches('?').to_string()),
+        }
+    }
+
+    /// Count document frequency for a term (number of documents containing the term)
+    fn count_doc_frequency(&self, inner: &LsmInner, index_name: &str, term: &str) -> u32 {
+        // Use prefix scanning to count all documents with this term
+        let fts_prefix = encode_fts_term_prefix(index_name, term);
+        let term_hash = crate::types::checksum::compute(term.as_bytes());
+        let stripe_id = (term_hash % 256) as usize;
+
+        let mut count = 0u32;
+
+        // Check memtable - count all keys with this term prefix
+        for (key, record) in inner.stripes[stripe_id].memtable.iter() {
+            if key.starts_with(&fts_prefix) && record.value.is_some() {
+                count += 1;
+            }
+        }
+
+        // In a full implementation, we would scan SST files too
+        // For simplicity, we just return the memtable count
+
+        count.max(1)
+    }
+
+    /// Add highlighting to search results
+    fn add_highlights(
+        &self,
+        inner: &LsmInner,
+        hits: &mut [SearchHit],
+        text_index: &TextIndex,
+        query: &FtsQuery,
+    ) -> Result<()> {
+        let tokenizer = Tokenizer::new(text_index);
+        let extractor = SnippetExtractor::default();
+
+        let query_terms: HashSet<String> = self.extract_query_terms(query).into_iter().collect();
+
+        for hit in hits {
+            // Get the original document
+            if let Ok(Some(item)) = self.get(&hit.key) {
+                if let Some(Value::S(text)) = item.get(&text_index.attribute) {
+                    let snippet = extractor.extract(text, &query_terms, &tokenizer);
+                    hit.snippet = Some(snippet);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Flush a specific stripe's memtable to SST
@@ -2051,6 +2785,40 @@ mod tests {
             let key = Key::new(format!("key{:03}", i).into_bytes());
             let result = db.get(&key).unwrap();
             assert!(result.is_some(), "Item should be in memtable");
+        }
+    }
+
+    #[test]
+    fn test_lsm_fts_persistence() {
+        use crate::fts::TextIndex;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        let schema = TableSchema::new()
+            .with_text_index(TextIndex::new("content-index", "content"));
+
+        // Create database, add document, verify search works
+        {
+            let db = LsmEngine::create_with_schema(path, schema.clone()).unwrap();
+
+            let key = Key::new(b"doc#1".to_vec());
+            let mut item = HashMap::new();
+            item.insert("content".to_string(), Value::S("The quick brown fox".to_string()));
+            db.put(key.clone(), item).unwrap();
+
+            // Verify document is searchable
+            let result = db.text_search("content-index", "fox", 10, false).unwrap();
+            assert_eq!(result.total_hits, 1, "Document should be searchable before close");
+        }
+
+        // Reopen with schema and verify search still works
+        {
+            let db = LsmEngine::open_with_schema(path, schema).unwrap();
+
+            // Verify document is still searchable
+            let result = db.text_search("content-index", "fox", 10, false).unwrap();
+            assert_eq!(result.total_hits, 1, "Document should be searchable after reopen");
         }
     }
 }
