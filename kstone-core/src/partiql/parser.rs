@@ -90,6 +90,11 @@ impl PartiQLParser {
             return Err(Error::InvalidQuery("Invalid JSON map syntax".into()));
         }
 
+        // Bounds check before slicing to prevent panic
+        if brace_end >= sql.len() {
+            return Err(Error::InvalidQuery("Invalid JSON map: closing brace beyond string bounds".into()));
+        }
+
         let json_str = &sql[brace_start..=brace_end];
         let value_map = Self::parse_json_string(json_str)?;
 
