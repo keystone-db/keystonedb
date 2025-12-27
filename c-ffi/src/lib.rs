@@ -43,6 +43,10 @@ pub const KSTONE_ERR_IO: c_int = -8;
 pub const KSTONE_ERR_CORRUPTION: c_int = -9;
 pub const KSTONE_ERR_INTERNAL: c_int = -10;
 
+/// Size limits (matching DynamoDB limits)
+const MAX_KEY_SIZE: usize = 2048; // 2KB max key size
+const MAX_VALUE_SIZE: usize = 400 * 1024; // 400KB max value size
+
 fn set_error(code: i32, message: String) {
     LAST_ERROR.with(|e| {
         *e.lock() = Some((code, message));
@@ -87,6 +91,34 @@ fn validate_db_path(path_str: &str) -> Option<std::path::PathBuf> {
     }
 
     Some(path.to_path_buf())
+}
+
+/// Validates a key size to prevent unbounded memory allocation.
+/// Returns the validated size or sets an error and returns None.
+fn validate_key_size(len: c_uint) -> Option<usize> {
+    let len = len as usize;
+    if len > MAX_KEY_SIZE {
+        set_error(
+            KSTONE_ERR_INVALID_ARGUMENT,
+            format!("Key size {} exceeds maximum {}", len, MAX_KEY_SIZE),
+        );
+        return None;
+    }
+    Some(len)
+}
+
+/// Validates a value size to prevent unbounded memory allocation.
+/// Returns the validated size or sets an error and returns None.
+fn validate_value_size(len: c_uint) -> Option<usize> {
+    let len = len as usize;
+    if len > MAX_VALUE_SIZE {
+        set_error(
+            KSTONE_ERR_INVALID_ARGUMENT,
+            format!("Value size {} exceeds maximum {}", len, MAX_VALUE_SIZE),
+        );
+        return None;
+    }
+    Some(len)
 }
 
 // ============================================================================
@@ -361,7 +393,12 @@ pub unsafe extern "C" fn kstone_db_put(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
 
     match (*db).inner.put(pk_slice, (*item).inner.clone()) {
         Ok(()) => KSTONE_OK,
@@ -390,8 +427,18 @@ pub unsafe extern "C" fn kstone_db_put_with_sk(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
 
     match (*db).inner.put_with_sk(pk_slice, sk_slice, (*item).inner.clone()) {
         Ok(()) => KSTONE_OK,
@@ -421,7 +468,12 @@ pub unsafe extern "C" fn kstone_db_get(
         return ptr::null_mut();
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
 
     match (*db).inner.get(pk_slice) {
         Ok(Some(item)) => Box::into_raw(Box::new(KstoneItem { inner: item })),
@@ -453,8 +505,18 @@ pub unsafe extern "C" fn kstone_db_get_with_sk(
         return ptr::null_mut();
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
 
     match (*db).inner.get_with_sk(pk_slice, sk_slice) {
         Ok(Some(item)) => Box::into_raw(Box::new(KstoneItem { inner: item })),
@@ -484,7 +546,12 @@ pub unsafe extern "C" fn kstone_db_delete(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
 
     match (*db).inner.delete(pk_slice) {
         Ok(()) => KSTONE_OK,
@@ -512,8 +579,18 @@ pub unsafe extern "C" fn kstone_db_delete_with_sk(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
 
     match (*db).inner.delete_with_sk(pk_slice, sk_slice) {
         Ok(()) => KSTONE_OK,
@@ -666,7 +743,12 @@ pub unsafe extern "C" fn kstone_item_set_binary(
         Err(_) => return KSTONE_ERR_INVALID_UTF8,
     };
 
-    let bytes = std::slice::from_raw_parts(value, value_len as usize).to_vec();
+    let value_len_validated = match validate_value_size(value_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let bytes = std::slice::from_raw_parts(value, value_len_validated).to_vec();
     (*item).inner.insert(key_str, kstone_api::KeystoneValue::B(bytes.into()));
     KSTONE_OK
 }
@@ -1017,7 +1099,12 @@ pub unsafe extern "C" fn kstone_query_new(
         return ptr::null_mut();
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     Box::into_raw(Box::new(KstoneQuery {
         inner: Query::new(pk_slice),
     }))
@@ -1042,7 +1129,12 @@ pub unsafe extern "C" fn kstone_query_sk_eq(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_eq(sk_slice);
     KSTONE_OK
@@ -1059,7 +1151,12 @@ pub unsafe extern "C" fn kstone_query_sk_begins_with(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let prefix_slice = std::slice::from_raw_parts(prefix, prefix_len as usize);
+    let prefix_len_validated = match validate_key_size(prefix_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let prefix_slice = std::slice::from_raw_parts(prefix, prefix_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_begins_with(prefix_slice);
     KSTONE_OK
@@ -1076,7 +1173,12 @@ pub unsafe extern "C" fn kstone_query_sk_gt(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_gt(sk_slice);
     KSTONE_OK
@@ -1093,7 +1195,12 @@ pub unsafe extern "C" fn kstone_query_sk_gte(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_gte(sk_slice);
     KSTONE_OK
@@ -1110,7 +1217,12 @@ pub unsafe extern "C" fn kstone_query_sk_lt(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_lt(sk_slice);
     KSTONE_OK
@@ -1127,7 +1239,12 @@ pub unsafe extern "C" fn kstone_query_sk_lte(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_lte(sk_slice);
     KSTONE_OK
@@ -1146,8 +1263,18 @@ pub unsafe extern "C" fn kstone_query_sk_between(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk1_slice = std::slice::from_raw_parts(sk1, sk1_len as usize);
-    let sk2_slice = std::slice::from_raw_parts(sk2, sk2_len as usize);
+    let sk1_len_validated = match validate_key_size(sk1_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk2_len_validated = match validate_key_size(sk2_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk1_slice = std::slice::from_raw_parts(sk1, sk1_len_validated);
+    let sk2_slice = std::slice::from_raw_parts(sk2, sk2_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_between(sk1_slice, sk2_slice);
     KSTONE_OK
@@ -1539,7 +1666,12 @@ pub unsafe extern "C" fn kstone_batch_get_add_key(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     let old_batch = std::mem::replace(&mut (*batch).inner, BatchGetRequest::new());
     (*batch).inner = old_batch.add_key(pk_slice);
     KSTONE_OK
@@ -1622,7 +1754,12 @@ pub unsafe extern "C" fn kstone_batch_write_put(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     let old_batch = std::mem::replace(&mut (*batch).inner, BatchWriteRequest::new());
     (*batch).inner = old_batch.put(pk_slice, (*item).inner.clone());
     KSTONE_OK
@@ -1639,7 +1776,12 @@ pub unsafe extern "C" fn kstone_batch_write_delete(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     let old_batch = std::mem::replace(&mut (*batch).inner, BatchWriteRequest::new());
     (*batch).inner = old_batch.delete(pk_slice);
     KSTONE_OK
