@@ -277,6 +277,12 @@ impl TransactWriteRequest {
         self
     }
 
+    /// Add a pre-built operation directly
+    pub fn add_operation(mut self, op: TransactWriteOp) -> Self {
+        self.operations.push(op);
+        self
+    }
+
     /// Get the operations
     pub fn operations(&self) -> &[TransactWriteOp] {
         &self.operations

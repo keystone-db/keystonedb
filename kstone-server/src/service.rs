@@ -690,7 +690,7 @@ impl KeystoneDb for KeystoneService {
                             .ok_or_else(|| Status::invalid_argument("Item required for put"))?,
                     )?;
 
-                    transact_request.operations.push(kstone_api::TransactWriteOp::Put {
+                    transact_request = transact_request.add_operation(kstone_api::TransactWriteOp::Put {
                         key,
                         item,
                         condition: put.condition_expression,
@@ -706,13 +706,11 @@ impl KeystoneDb for KeystoneService {
                         kstone_core::Key::new(Bytes::from(update.partition_key))
                     };
 
-                    transact_request
-                        .operations
-                        .push(kstone_api::TransactWriteOp::Update {
-                            key,
-                            update_expression: update.update_expression,
-                            condition: update.condition_expression,
-                        });
+                    transact_request = transact_request.add_operation(kstone_api::TransactWriteOp::Update {
+                        key,
+                        update_expression: update.update_expression,
+                        condition: update.condition_expression,
+                    });
                 }
                 ProtoTxItem::Delete(delete) => {
                     let key = if let Some(sk) = delete.sort_key {
@@ -724,12 +722,10 @@ impl KeystoneDb for KeystoneService {
                         kstone_core::Key::new(Bytes::from(delete.partition_key))
                     };
 
-                    transact_request
-                        .operations
-                        .push(kstone_api::TransactWriteOp::Delete {
-                            key,
-                            condition: delete.condition_expression,
-                        });
+                    transact_request = transact_request.add_operation(kstone_api::TransactWriteOp::Delete {
+                        key,
+                        condition: delete.condition_expression,
+                    });
                 }
                 ProtoTxItem::ConditionCheck(check) => {
                     let key = if let Some(sk) = check.sort_key {
@@ -741,12 +737,10 @@ impl KeystoneDb for KeystoneService {
                         kstone_core::Key::new(Bytes::from(check.partition_key))
                     };
 
-                    transact_request
-                        .operations
-                        .push(kstone_api::TransactWriteOp::ConditionCheck {
-                            key,
-                            condition: check.condition_expression,
-                        });
+                    transact_request = transact_request.add_operation(kstone_api::TransactWriteOp::ConditionCheck {
+                        key,
+                        condition: check.condition_expression,
+                    });
                 }
             }
         }
@@ -861,6 +855,10 @@ impl KeystoneDb for KeystoneService {
             }
             kstone_api::ExecuteStatementResponse::Delete { success } => {
                 ProtoStmtResponse::Delete(proto::DeleteResult { success })
+            }
+            // Handle future response variants
+            _ => {
+                return Err(Status::unimplemented("Unsupported statement response type"));
             }
         };
 
