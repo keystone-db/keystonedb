@@ -2,7 +2,7 @@
 
 **A Comprehensive Guide to KeystoneDB: DynamoDB-Style Embedded Database in Rust**
 
-Version 1.0 | ~180,000 words | 41 Chapters + 5 Appendices
+Version 1.1 | ~140,000 words | 43 Chapters + 5 Appendices
 
 ---
 
@@ -111,8 +111,12 @@ The KeystoneDB Book is a complete technical guide covering every aspect of Keyst
   - WAL/SST format specifications, key encoding, checksums
 - **[Chapter 40: Recovery & Consistency](part-10/chapter-40.md)** (4,100 words)
   - ACID guarantees, crash recovery, failure scenarios
-- **[Chapter 41: Future Roadmap](part-10/chapter-41.md)** (3,600 words)
-  - Planned features, vector search, cloud sync, long-term vision
+- **[Chapter 41: Future Roadmap](part-10/chapter-41.md)** (5,200 words)
+  - Completed phases 0-8, planned features (vector search, FTS, DynamoDB sync), long-term vision
+- **[Chapter 42: Cloud Synchronization](part-10/chapter-42.md)** (6,500 words)
+  - Vector clocks, Merkle trees, S3/filesystem sync, conflict resolution, offline support
+- **[Chapter 43: Language Bindings](part-10/chapter-43.md)** (7,000 words)
+  - Python (PyO3), Node.js (napi-rs), C-FFI bindings, API reference, usage examples
 
 ### Appendices
 - **[Appendix A: Configuration Reference](appendices/appendix-a.md)** (3,900 words)
@@ -130,12 +134,12 @@ The KeystoneDB Book is a complete technical guide covering every aspect of Keyst
 
 ## Book Statistics
 
-- **Total Word Count**: ~180,000 words
-- **Total Chapters**: 41 chapters + 5 appendices
-- **Total Pages**: ~400-500 pages (estimated)
-- **Code Examples**: 500+ working code snippets
+- **Total Word Count**: ~140,000 words
+- **Total Chapters**: 43 chapters + 5 appendices
+- **Total Pages**: ~280-320 pages (estimated)
+- **Code Examples**: 550+ working code snippets
 - **Diagrams**: 100+ ASCII diagrams and tables
-- **Coverage**: Complete feature set from basics to internals
+- **Coverage**: Complete feature set from basics to internals, including cloud sync and language bindings
 
 ## What You'll Learn
 

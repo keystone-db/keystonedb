@@ -1,6 +1,6 @@
 # Chapter 41: Future Roadmap
 
-KeystoneDB has achieved significant milestones through Phase 7, delivering a production-ready embedded database with DynamoDB compatibility, PartiQL support, and a robust interactive CLI. This chapter outlines the planned features, enhancements, and strategic direction for the project.
+KeystoneDB has achieved significant milestones through Phase 8, delivering a production-ready embedded database with DynamoDB compatibility, PartiQL support, cloud synchronization, and comprehensive language bindings. This chapter outlines the planned features, enhancements, and strategic direction for the project.
 
 ## Vision Statement
 
@@ -13,91 +13,113 @@ KeystoneDB has achieved significant milestones through Phase 7, delivering a pro
 4. **Performance** - Competitive with best-in-class embedded databases
 5. **Open Source** - Community-driven development
 
-## Phase 8: Operational Excellence
+## Completed Phases
 
-**Status:** Planned for Q1 2025
+### Phase 0-7: Core Database (COMPLETE ✅)
 
-### Configuration Management
+All foundational phases are complete:
+- **Phase 0**: Walking skeleton with basic CRUD
+- **Phase 1**: Core storage engine (256-stripe LSM, WAL, SST, compaction)
+- **Phase 2**: Complete DynamoDB API (Query, Scan, Batch, Transactions)
+- **Phase 3**: Secondary indexes (LSI, GSI), TTL, and Streams
+- **Phase 4**: PartiQL SQL-compatible query language
+- **Phase 5**: In-memory database mode
+- **Phase 6**: gRPC server and client library
+- **Phase 7**: Interactive CLI shell with autocomplete
 
-**Objective:** Provide comprehensive configuration options for tuning performance and resource usage.
+### Phase 8: Cloud Synchronization (COMPLETE ✅)
 
-**Features:**
-- DatabaseConfig with tunable parameters
-- Runtime configuration updates (hot reload)
-- Configuration validation and defaults
-- Environment variable support
+Full bidirectional synchronization with cloud storage and remote databases:
 
-**API Example:**
-```rust
-let config = DatabaseConfig::new()
-    .with_max_memtable_size_bytes(10 * 1024 * 1024)  // 10MB
-    .with_max_memtable_records(5000)
-    .with_compaction_threshold(8)
-    .with_max_concurrent_compactions(4)
-    .with_write_buffer_size(4096);
-
-let db = Database::create_with_config(path, config)?;
-```
-
-### Health and Statistics APIs
-
-**Objective:** Enable monitoring and diagnostics for production deployments.
-
-**Features:**
-- db.stats() for runtime metrics
-- db.health() for operational status
-- Per-stripe statistics
-- Compaction metrics
-- Resource usage tracking
+**Features Implemented:**
+- **Vector Clocks**: Causality tracking for distributed operations
+- **Merkle Trees**: Efficient diff detection with 16-way fanout
+- **Sync Engine**: State machine (Idle → Connecting → Handshaking → Discovering → Transferring → Committing → Completed)
+- **Conflict Resolution**: LastWriterWins, FirstWriterWins, and Custom strategies
+- **S3 Protocol**: Upload/download snapshots to S3-compatible storage
+- **Filesystem Protocol**: Sync between local databases
+- **Offline Queue**: Store pending operations with retry policies
 
 **API Example:**
 ```rust
-let stats = db.stats()?;
-println!("Total SST files: {}", stats.total_sst_files);
-println!("Compaction write amplification: {:.2}x",
-    stats.compaction.total_bytes_written as f64 /
-    stats.compaction.total_bytes_read as f64
-);
+use kstone_sync::{CloudSyncBuilder, SyncEndpoint, ConflictStrategy};
+use kstone_api::Database;
+use std::sync::Arc;
 
-let health = db.health();
-match health.status {
-    HealthStatus::Healthy => println!("All systems operational"),
-    HealthStatus::Degraded => {
-        for warning in &health.warnings {
-            println!("WARNING: {}", warning);
-        }
-    }
-    HealthStatus::Unhealthy => {
-        for error in &health.errors {
-            println!("ERROR: {}", error);
-        }
-    }
-}
+let db = Arc::new(Database::create("local.keystone")?);
+let engine = CloudSyncBuilder::new()
+    .with_database(db)
+    .with_endpoint(SyncEndpoint::S3 {
+        bucket: "my-bucket".to_string(),
+        prefix: "backups/".to_string(),
+        region: "us-east-1".to_string(),
+        endpoint_url: None,
+        credentials: None,
+    })
+    .with_conflict_strategy(ConflictStrategy::LastWriterWins)
+    .with_sync_interval(std::time::Duration::from_secs(30))
+    .with_batch_size(100)
+    .build()?;
+
+// Perform sync
+let stats = engine.sync(endpoint).await?;
+println!("Sent: {}, Received: {}", stats.items_sent, stats.items_received);
 ```
 
-### Resource Limits
+See **Chapter 42: Cloud Synchronization** for complete documentation.
 
-**Objective:** Prevent unbounded resource consumption.
+### Language Bindings (COMPLETE ✅)
 
-**Features:**
-- Maximum database size limits
-- Maximum memtable size (bytes and records)
-- Maximum WAL size
-- Connection limits (for server mode)
-- Query timeouts
+Production-ready bindings for multiple languages:
 
-**Configuration:**
-```rust
-DatabaseConfig {
-    max_total_disk_bytes: Some(100 * 1024 * 1024 * 1024),  // 100GB
-    max_memtable_size_bytes: Some(10 * 1024 * 1024),        // 10MB
-    max_wal_size_bytes: Some(100 * 1024 * 1024),           // 100MB
-    query_timeout: Some(Duration::from_secs(30)),
-    // ...
-}
+**Python Bindings (PyO3):**
+```python
+from keystonedb import Database
+
+db = Database.create("mydb.keystone")
+db.put(b"user#123", {"name": "Alice", "age": 30})
+item = db.get(b"user#123")
+print(item["name"])  # Alice
+
+# Full query support
+results = db.query(b"org#acme", sk_begins_with=b"USER#", limit=10)
+
+# PartiQL execution
+db.execute("SELECT * FROM items WHERE pk = 'user#123'")
 ```
 
-## Phase 9: Advanced Compaction
+**Node.js Bindings (napi-rs):**
+```javascript
+const { Database } = require('keystonedb');
+
+const db = Database.create('mydb.keystone');
+db.put('user#123', { name: 'Alice', age: 30 });
+const item = db.get('user#123');
+console.log(item.name);  // Alice
+
+// Full query support
+const results = db.query('org#acme', { skBeginsWith: 'USER#', limit: 10 });
+
+// PartiQL execution
+db.execute("SELECT * FROM items WHERE pk = 'user#123'");
+```
+
+**C-FFI Bindings:**
+```c
+#include "keystonedb.h"
+
+kstone_db_t* db = kstone_db_create("mydb.keystone");
+kstone_item_t* item = kstone_item_create();
+kstone_item_set_string(item, "name", "Alice");
+kstone_item_set_number(item, "age", 30);
+kstone_db_put(db, "user#123", 8, item);
+kstone_item_free(item);
+kstone_db_free(db);
+```
+
+See **Chapter 43: Language Bindings** for complete documentation.
+
+## Phase 9: Advanced Compaction (Planned)
 
 **Status:** Planned for Q2 2025
 
@@ -129,11 +151,6 @@ L3: [SST SST ... (800 SSTs) ...]  (10x L2, sorted)
 - Predictable read performance (max log(N) levels)
 - Space amplification bounded
 
-**Trade-offs:**
-- More complex compaction logic
-- Potentially higher read amplification
-- Increased CPU usage for compaction scheduling
-
 ### Parallel Compaction
 
 **Objective:** Compact multiple stripes concurrently.
@@ -154,11 +171,6 @@ for stripe_id in stripes_needing_compaction {
 }
 ```
 
-**Benefits:**
-- Better CPU utilization on multi-core systems
-- Faster compaction completion
-- Reduced time in "degraded" state (too many SSTs)
-
 ### Compaction Prioritization
 
 **Objective:** Compact stripes with highest benefit first.
@@ -175,12 +187,7 @@ fn compaction_priority(stripe: &Stripe) -> f64 {
 }
 ```
 
-**Benefits:**
-- Faster space reclamation
-- Better read performance (compact hot stripes first)
-- Adaptive to workload patterns
-
-## Phase 10: Vector Search
+## Phase 10: Vector Search (Planned)
 
 **Status:** Planned for Q3 2025
 
@@ -244,7 +251,7 @@ for result in results {
 - **Image similarity** - Find visually similar images
 - **Anomaly detection** - Find outliers in embeddings
 
-## Phase 11: Full-Text Search
+## Phase 11: Full-Text Search (Planned)
 
 **Status:** Planned for Q4 2025
 
@@ -297,13 +304,13 @@ for result in results {
 - Combine full-text search with DynamoDB queries
 - Filter by attributes while searching text
 
-## Phase 12: Cloud Synchronization
+## Phase 12: DynamoDB Attachment (Planned)
 
 **Status:** Planned for 2026
 
-### DynamoDB Sync
+### Bidirectional DynamoDB Sync
 
-**Objective:** Bidirectional sync with AWS DynamoDB.
+**Objective:** Seamless synchronization with AWS DynamoDB.
 
 **Architecture:**
 ```
@@ -327,7 +334,7 @@ for result in results {
 
 **Features:**
 - Initial sync (full table download)
-- Incremental sync (changes only)
+- Incremental sync (changes only via DynamoDB Streams)
 - Conflict resolution (last-write-wins or custom)
 - Offline operation (sync when reconnected)
 - Bi-directional sync (local ↔ cloud)
@@ -347,83 +354,11 @@ let handle = sync.start(db.clone())?;
 // Local writes sync to DynamoDB
 db.put(b"user#123", item)?;  // → synced to DynamoDB
 
-// DynamoDB writes sync to local
-// (DynamoDB Streams → local KeystoneDB)
-
 // Stop sync
 handle.stop()?;
 ```
 
-### Remote KeystoneDB Sync
-
-**Objective:** Peer-to-peer replication between KeystoneDB instances.
-
-**Use Cases:**
-- Multi-region deployments
-- Edge-to-cloud sync
-- Backup and disaster recovery
-- Read replicas for scaling
-
-**Architecture:**
-```
-Primary KeystoneDB
-       │
-       ├─→ Replica 1 (read-only)
-       ├─→ Replica 2 (read-only)
-       └─→ Replica 3 (read-only)
-```
-
-**Features:**
-- Write-ahead log shipping
-- Incremental replication
-- Multiple replicas per primary
-- Automatic failover (future)
-
-**API Example:**
-```rust
-// On primary
-let replication = Replication::new()
-    .role(Role::Primary)
-    .replicas(vec![
-        "replica1.example.com:50051",
-        "replica2.example.com:50051",
-    ]);
-
-db.enable_replication(replication)?;
-
-// On replica
-let replication = Replication::new()
-    .role(Role::Replica)
-    .primary("primary.example.com:50051");
-
-db.enable_replication(replication)?;
-```
-
-### Conflict Resolution Strategies
-
-**Last-Write-Wins (LWW):**
-- Use sequence numbers to determine winner
-- Simple and predictable
-- May lose concurrent updates
-
-**Multi-Version Concurrency Control (MVCC):**
-- Keep multiple versions of same key
-- Application resolves conflicts
-- More complex but more flexible
-
-**Custom Resolver:**
-```rust
-db.set_conflict_resolver(|local: &Item, remote: &Item| {
-    // Application-specific logic
-    if local.get("priority")? > remote.get("priority")? {
-        Ok(local.clone())
-    } else {
-        Ok(remote.clone())
-    }
-})?;
-```
-
-## Phase 13: Advanced Features
+## Phase 13: Advanced Features (Long-term)
 
 **Status:** Long-term (2026+)
 
@@ -443,18 +378,6 @@ let encryption = EncryptionConfig::new()
 
 let db = Database::create_with_encryption(path, encryption)?;
 ```
-
-### Compression
-
-**Features:**
-- Zstd compression for SST blocks
-- Configurable compression levels
-- Dictionary compression for repeated patterns
-
-**Benefits:**
-- 50-80% size reduction
-- Faster disk I/O (less data to read)
-- Trade-off: CPU overhead for compression/decompression
 
 ### Point-in-Time Recovery (PITR)
 
@@ -498,77 +421,9 @@ let tenant_b = db.tenant("tenant-b")?;
 tenant_b.put(b"user#123", different_item)?;  // No conflict
 ```
 
-## Community Priorities
-
-The roadmap is influenced by community feedback. Top requested features:
-
-### 1. Python Bindings
-
-**Status:** High priority
-
-Provide PyO3 bindings for Python applications:
-
-```python
-import keystonedb
-
-db = keystonedb.Database.create("/path/to/db")
-
-db.put(b"user#123", {
-    "name": "Alice",
-    "age": 30,
-    "email": "alice@example.com"
-})
-
-user = db.get(b"user#123")
-print(user["name"])  # "Alice"
-```
-
-### 2. JavaScript/TypeScript Bindings
-
-**Status:** Medium priority
-
-WASM bindings for browser and Node.js:
-
-```typescript
-import { Database } from 'keystonedb-wasm';
-
-const db = await Database.create('/path/to/db');
-
-await db.put('user#123', {
-  name: 'Alice',
-  age: 30,
-  email: 'alice@example.com'
-});
-
-const user = await db.get('user#123');
-console.log(user.name);  // "Alice"
-```
-
-### 3. Cloud-Native Deployment
-
-**Status:** Medium priority
-
-Kubernetes operator and Helm charts:
-
-```bash
-helm install my-keystonedb keystonedb/keystonedb \
-  --set replicas=3 \
-  --set storage.size=100Gi \
-  --set monitoring.enabled=true
-```
-
-### 4. Observability Enhancements
-
-**Status:** High priority
-
-- OpenTelemetry integration
-- Distributed tracing
-- Structured logging (JSON output)
-- Grafana dashboards
-
 ## Performance Targets
 
-Target performance for v1.0 (end of Phase 13):
+Target performance for v2.0 (end of Phase 13):
 
 ### Write Performance
 - **Single-threaded:** 10k ops/sec
@@ -595,7 +450,7 @@ KeystoneDB is open source and welcomes contributions:
 **Priority Areas:**
 1. Performance benchmarking and optimization
 2. Documentation and tutorials
-3. Language bindings (Python, JavaScript, Go)
+3. Additional language bindings (Go, Java, Swift)
 4. Integration tests and fuzzing
 5. Example applications and use cases
 
@@ -618,7 +473,7 @@ KeystoneDB is open source and welcomes contributions:
 - **Patch releases (x.y.z):** As needed for critical bugs
 
 **Version 1.0 Criteria:**
-- All Phase 8-11 features complete
+- All Phase 9-11 features complete
 - Production deployments in 3+ organizations
 - 90%+ test coverage
 - Complete documentation
