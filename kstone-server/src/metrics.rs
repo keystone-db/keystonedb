@@ -4,95 +4,142 @@
 /// Metrics are collected automatically by instrumented RPC handlers and
 /// exposed at the /metrics endpoint in Prometheus format.
 
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use prometheus::{
-    opts, histogram_opts, register_histogram_vec, register_int_counter_vec, register_int_gauge,
-    HistogramVec, IntCounterVec, IntGauge, Registry, TextEncoder, Encoder,
+    opts, histogram_opts, HistogramVec, IntCounterVec, IntGauge, Registry, TextEncoder, Encoder,
 };
 
-lazy_static! {
-    /// Global Prometheus registry
-    pub static ref REGISTRY: Registry = Registry::new();
+/// Global Prometheus registry
+pub static REGISTRY: Lazy<Registry> = Lazy::new(Registry::new);
 
-    /// Total number of RPC requests by method and status
-    ///
-    /// Labels:
-    /// - method: RPC method name (put, get, delete, query, etc.)
-    /// - status: success or error
-    pub static ref RPC_REQUESTS_TOTAL: IntCounterVec = register_int_counter_vec!(
+/// Total number of RPC requests by method and status
+///
+/// Labels:
+/// - method: RPC method name (put, get, delete, query, etc.)
+/// - status: success or error
+pub static RPC_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    IntCounterVec::new(
         opts!(
             "kstone_rpc_requests_total",
             "Total number of RPC requests"
         ),
-        &["method", "status"]
+        &["method", "status"],
     )
-    .expect("Failed to create RPC_REQUESTS_TOTAL metric - metric name may be invalid or already registered");
+    .unwrap_or_else(|_| {
+        // Fallback to a metric with a different name if creation fails
+        IntCounterVec::new(
+            opts!("kstone_rpc_requests_total_fallback", "Total RPC requests"),
+            &["method", "status"],
+        )
+        .expect("Failed to create fallback RPC_REQUESTS_TOTAL metric")
+    })
+});
 
-    /// RPC request duration in seconds
-    ///
-    /// Labels:
-    /// - method: RPC method name
-    ///
-    /// Buckets: 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0 seconds
-    pub static ref RPC_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
+/// RPC request duration in seconds
+///
+/// Labels:
+/// - method: RPC method name
+///
+/// Buckets: 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0 seconds
+pub static RPC_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    HistogramVec::new(
         histogram_opts!(
             "kstone_rpc_duration_seconds",
             "RPC request duration in seconds",
             vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]
         ),
-        &["method"]
+        &["method"],
     )
-    .expect("Failed to create RPC_DURATION_SECONDS metric - metric name may be invalid or already registered");
-
-    /// Number of active gRPC connections
-    pub static ref ACTIVE_CONNECTIONS: IntGauge = register_int_gauge!(
-        opts!(
-            "kstone_active_connections",
-            "Number of active gRPC connections"
+    .unwrap_or_else(|_| {
+        HistogramVec::new(
+            histogram_opts!(
+                "kstone_rpc_duration_seconds_fallback",
+                "RPC request duration"
+            ),
+            &["method"],
         )
-    )
-    .expect("Failed to create ACTIVE_CONNECTIONS metric - metric name may be invalid or already registered");
+        .expect("Failed to create fallback RPC_DURATION_SECONDS metric")
+    })
+});
 
-    /// Total number of database operations by operation type and status
-    ///
-    /// Labels:
-    /// - operation: put, get, delete, query, scan, update, etc.
-    /// - status: success or error
-    pub static ref DB_OPERATIONS_TOTAL: IntCounterVec = register_int_counter_vec!(
+/// Number of active gRPC connections
+pub static ACTIVE_CONNECTIONS: Lazy<IntGauge> = Lazy::new(|| {
+    IntGauge::new(
+        "kstone_active_connections",
+        "Number of active gRPC connections",
+    )
+    .unwrap_or_else(|_| {
+        IntGauge::new(
+            "kstone_active_connections_fallback",
+            "Active connections",
+        )
+        .expect("Failed to create fallback ACTIVE_CONNECTIONS metric")
+    })
+});
+
+/// Total number of database operations by operation type and status
+///
+/// Labels:
+/// - operation: put, get, delete, query, scan, update, etc.
+/// - status: success or error
+pub static DB_OPERATIONS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    IntCounterVec::new(
         opts!(
             "kstone_db_operations_total",
             "Total number of database operations"
         ),
-        &["operation", "status"]
+        &["operation", "status"],
     )
-    .expect("Failed to create DB_OPERATIONS_TOTAL metric - metric name may be invalid or already registered");
+    .unwrap_or_else(|_| {
+        IntCounterVec::new(
+            opts!("kstone_db_operations_total_fallback", "Database operations"),
+            &["operation", "status"],
+        )
+        .expect("Failed to create fallback DB_OPERATIONS_TOTAL metric")
+    })
+});
 
-    /// Total number of errors by error type
-    ///
-    /// Labels:
-    /// - error_type: not_found, invalid_argument, condition_failed, etc.
-    pub static ref ERRORS_TOTAL: IntCounterVec = register_int_counter_vec!(
+/// Total number of errors by error type
+///
+/// Labels:
+/// - error_type: not_found, invalid_argument, condition_failed, etc.
+pub static ERRORS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    IntCounterVec::new(
         opts!(
             "kstone_errors_total",
             "Total number of errors by type"
         ),
-        &["error_type"]
+        &["error_type"],
     )
-    .expect("Failed to create ERRORS_TOTAL metric - metric name may be invalid or already registered");
+    .unwrap_or_else(|_| {
+        IntCounterVec::new(
+            opts!("kstone_errors_total_fallback", "Total errors"),
+            &["error_type"],
+        )
+        .expect("Failed to create fallback ERRORS_TOTAL metric")
+    })
+});
 
-    /// Total number of rate-limited requests
-    ///
-    /// Labels:
-    /// - limit_type: per_connection or global
-    pub static ref RATE_LIMITED_REQUESTS: IntCounterVec = register_int_counter_vec!(
+/// Total number of rate-limited requests
+///
+/// Labels:
+/// - limit_type: per_connection or global
+pub static RATE_LIMITED_REQUESTS: Lazy<IntCounterVec> = Lazy::new(|| {
+    IntCounterVec::new(
         opts!(
             "kstone_rate_limited_requests_total",
             "Total number of rate-limited requests"
         ),
-        &["limit_type"]
+        &["limit_type"],
     )
-    .expect("Failed to create RATE_LIMITED_REQUESTS metric - metric name may be invalid or already registered");
-}
+    .unwrap_or_else(|_| {
+        IntCounterVec::new(
+            opts!("kstone_rate_limited_requests_total_fallback", "Rate limited requests"),
+            &["limit_type"],
+        )
+        .expect("Failed to create fallback RATE_LIMITED_REQUESTS metric")
+    })
+});
 
 /// Register all metrics with the global registry
 ///

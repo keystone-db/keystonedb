@@ -2488,6 +2488,7 @@ dependencies = [
  "kstone-core",
  "kstone-proto",
  "lazy_static",
+ "once_cell",
  "prometheus",
  "prost",
  "serde",

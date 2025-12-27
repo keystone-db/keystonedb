@@ -44,6 +44,7 @@ futures = "0.3"
 # Observability
 prometheus = { workspace = true }
 lazy_static = { workspace = true }
+once_cell = { workspace = true }
 axum = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
 

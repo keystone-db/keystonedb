@@ -82,6 +82,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # Observability
 prometheus = "0.14"
 lazy_static = "1.4"
+once_cell = "1.19"
 axum = "0.7"
 
 # Rate Limiting
