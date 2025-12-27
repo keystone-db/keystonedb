@@ -288,7 +288,7 @@ match health.status {
 
 ## Architecture
 
-KeystoneDB is organized as a Cargo workspace with 4 crates:
+KeystoneDB is organized as a Cargo workspace with 9 crates:
 
 - **kstone-core**: Storage engine implementation
   - LSM tree with 256 stripes for parallelism
@@ -296,20 +296,48 @@ KeystoneDB is organized as a Cargo workspace with 4 crates:
   - Sorted String Tables (SST) with bloom filters
   - Background compaction manager
   - PartiQL parser, validator, and translator
+  - Expression system for conditions and updates
 
 - **kstone-api**: Public API layer
   - Database operations (Put/Get/Delete/Query/Scan)
   - Batch and transaction operations
   - Index management (LSI/GSI)
   - PartiQL execute_statement
+  - In-memory database mode
+
+- **kstone-proto**: Protocol Buffers definitions
+  - gRPC service interface (11 RPC methods)
+  - All DynamoDB-compatible value types
+
+- **kstone-server**: gRPC server implementation
+  - Remote database access over network
+  - Rate limiting and metrics
+  - TLS support
+
+- **kstone-client**: gRPC client library
+  - Rust client for remote access
+  - Async/await support
+  - Connection management
+
+- **kstone-sync**: Cloud sync engine
+  - Bidirectional sync with S3 and filesystem
+  - Vector clocks for causality
+  - Merkle trees for efficient diffing
+  - Conflict resolution strategies
 
 - **kstone-cli**: Command-line interface
   - Database creation and management
-  - Item operations
+  - Interactive shell with autocomplete
   - PartiQL query interface with multiple output formats
 
 - **kstone-tests**: Integration test suite
-  - End-to-end tests across all features
+  - Property-based tests (proptest)
+  - Chaos and fault injection tests
+  - Snapshot tests (insta)
+  - Long-running stability tests
+
+- **c-ffi**: C foreign function interface
+  - Language bindings support (Go, Python)
 
 ## Project Status
 
@@ -340,14 +368,80 @@ See [PERFORMANCE.md](PERFORMANCE.md) for optimization guidance and best practice
 
 ### User Guides
 - [README.md](README.md) - This file: Getting started and feature overview
+- [docs/API.md](docs/API.md) - Complete API reference
 - [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment and configuration guide
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues and solutions
 - [PERFORMANCE.md](PERFORMANCE.md) - Performance characteristics and optimization
 - [MONITORING.md](MONITORING.md) - Observability, metrics, and health checks
+- [BINDINGS.md](BINDINGS.md) - Language bindings (Go, Python, JavaScript)
 
 ### Developer Guides
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Internal design and implementation details
 - [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code
+
+### Book
+The [KeystoneDB Book](book/README.md) provides comprehensive documentation with 41 chapters covering everything from getting started to internals.
+
+## gRPC Server
+
+Start a gRPC server for remote database access:
+
+```bash
+# Start server
+kstone-server --db-path mydb.keystone --port 50051
+
+# With TLS
+kstone-server --db-path mydb.keystone \
+  --tls-cert /path/to/cert.pem \
+  --tls-key /path/to/key.pem
+```
+
+### Rust Client
+
+```rust
+use kstone_client::{Client, RemoteQuery};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect to server
+    let mut client = Client::connect("http://localhost:50051").await?;
+
+    // Put an item
+    let mut item = HashMap::new();
+    item.insert("name".to_string(), Value::S("Alice".to_string()));
+    client.put(b"user#123", item).await?;
+
+    // Query
+    let query = RemoteQuery::new(b"user#123").limit(10);
+    let response = client.query(query).await?;
+
+    Ok(())
+}
+```
+
+## Cloud Sync
+
+Sync databases with S3 or filesystem backends:
+
+```rust
+use kstone_sync::{CloudSyncBuilder, SyncEndpoint, ConflictStrategy};
+
+// Sync with S3
+let engine = CloudSyncBuilder::new()
+    .with_database(db)
+    .with_endpoint(SyncEndpoint::S3 {
+        bucket: "my-bucket".to_string(),
+        prefix: "backups/".to_string(),
+        region: "us-east-1".to_string(),
+        endpoint_url: None,
+        credentials: None,
+    })
+    .with_conflict_strategy(ConflictStrategy::LastWriterWins)
+    .build()?;
+
+let stats = engine.sync(endpoint).await?;
+println!("Sent: {}, Received: {}", stats.items_sent, stats.items_received);
+```
 
 ## Testing
 
@@ -358,12 +452,32 @@ cargo test
 # Run tests for specific crate
 cargo test -p kstone-core
 cargo test -p kstone-api
+cargo test -p kstone-sync
+cargo test -p kstone-tests
 
 # Run specific test
 cargo test -p kstone-core test_lsm_put_get
 
 # Run integration tests
 cargo test -p kstone-tests
+
+# Run property-based tests
+cargo test -p kstone-tests --test property_tests
+
+# Run chaos/fault injection tests
+cargo test -p kstone-tests --test chaos_tests
+
+# Run snapshot tests
+cargo test -p kstone-tests --test snapshot_tests
+
+# Run long-running stability tests (ignored by default)
+cargo test -p kstone-tests --test stability_tests -- --ignored
+
+# Code coverage
+./scripts/coverage.sh
+
+# Fuzz testing (requires nightly)
+./scripts/fuzz.sh fuzz_put_get
 ```
 
 ## License
