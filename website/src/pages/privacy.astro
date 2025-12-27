@@ -1,0 +1,156 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { Shield, Eye, Database, Server } from 'lucide-react';
+---
+
+<BaseLayout title="Privacy Policy - KeystoneDB" description="Privacy policy for KeystoneDB website and software">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          Privacy Policy
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+          Your privacy matters. Here's how we handle your data.
+        </p>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-4">
+          Last updated: December 2024
+        </p>
+      </div>
+
+      <!-- Content -->
+      <div class="max-w-3xl mx-auto space-y-8">
+        <!-- TL;DR -->
+        <div class="card bg-gradient-to-r from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 border-green-200 dark:border-green-800">
+          <div class="flex items-start gap-4">
+            <Shield className="w-8 h-8 text-green-600 dark:text-green-400 flex-shrink-0" />
+            <div>
+              <h2 class="text-xl font-bold text-slate-900 dark:text-white mb-2">TL;DR</h2>
+              <p class="text-slate-700 dark:text-slate-300">
+                KeystoneDB is an embedded database that runs entirely on your machine. <strong>We don't collect any data from the database software itself.</strong> This website uses minimal analytics to improve documentation.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Software Privacy -->
+        <div class="card">
+          <div class="flex items-center gap-3 mb-4">
+            <Database className="w-6 h-6 text-primary-600 dark:text-primary-400" />
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white">KeystoneDB Software</h2>
+          </div>
+          <div class="space-y-4 text-slate-600 dark:text-slate-300">
+            <p>
+              KeystoneDB is an embedded database that runs entirely on your local machine or server. The software:
+            </p>
+            <ul class="space-y-2 ml-4">
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Does NOT phone home or send any data to external servers</span>
+              </li>
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Does NOT collect usage analytics or telemetry</span>
+              </li>
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Does NOT require an internet connection to operate</span>
+              </li>
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Stores all data locally in your specified database file</span>
+              </li>
+            </ul>
+            <p>
+              When using cloud sync features (S3, filesystem sync), data is transferred only to the endpoints you explicitly configure. We have no access to your synced data.
+            </p>
+          </div>
+        </div>
+
+        <!-- Website Privacy -->
+        <div class="card">
+          <div class="flex items-center gap-3 mb-4">
+            <Eye className="w-6 h-6 text-accent-600 dark:text-accent-400" />
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Website</h2>
+          </div>
+          <div class="space-y-4 text-slate-600 dark:text-slate-300">
+            <p>
+              This documentation website may collect minimal, anonymous analytics to help us improve the documentation:
+            </p>
+            <ul class="space-y-2 ml-4">
+              <li><strong>Page views:</strong> Which documentation pages are most visited</li>
+              <li><strong>Referrers:</strong> How visitors find our documentation</li>
+              <li><strong>Browser/device:</strong> General browser and device categories</li>
+            </ul>
+            <p>
+              We use privacy-respecting analytics that:
+            </p>
+            <ul class="space-y-2 ml-4">
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Do NOT use cookies for tracking</span>
+              </li>
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Do NOT collect personal information</span>
+              </li>
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Do NOT track users across websites</span>
+              </li>
+              <li class="flex gap-2">
+                <span class="text-green-500">&#10003;</span>
+                <span>Are compliant with GDPR, CCPA, and PECR</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- GitHub -->
+        <div class="card">
+          <div class="flex items-center gap-3 mb-4">
+            <Server className="w-6 h-6 text-slate-600 dark:text-slate-400" />
+            <h2 class="text-2xl font-bold text-slate-900 dark:text-white">Third-Party Services</h2>
+          </div>
+          <div class="space-y-4 text-slate-600 dark:text-slate-300">
+            <p>
+              Our project uses the following third-party services, each with their own privacy policies:
+            </p>
+            <ul class="space-y-3 ml-4">
+              <li>
+                <strong>GitHub:</strong> Source code hosting, issues, and discussions.
+                <a href="https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement" target="_blank" rel="noopener noreferrer" class="text-primary-600 dark:text-primary-400 hover:underline ml-1">Privacy Policy</a>
+              </li>
+              <li>
+                <strong>Vercel/Netlify:</strong> Website hosting (if applicable).
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Contact -->
+        <div class="card">
+          <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">Questions?</h2>
+          <p class="text-slate-600 dark:text-slate-300 mb-4">
+            If you have any questions about this privacy policy or how we handle data, please:
+          </p>
+          <ul class="space-y-2 text-slate-600 dark:text-slate-300 ml-4">
+            <li>
+              Open an issue on <a href="https://github.com/keystone-db/keystonedb" target="_blank" rel="noopener noreferrer" class="text-primary-600 dark:text-primary-400 hover:underline">GitHub</a>
+            </li>
+            <li>
+              Start a discussion in <a href="https://github.com/keystone-db/keystonedb/discussions" target="_blank" rel="noopener noreferrer" class="text-primary-600 dark:text-primary-400 hover:underline">GitHub Discussions</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

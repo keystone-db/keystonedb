@@ -551,7 +551,7 @@ console.log(user.name);  // "Alice"
 Kubernetes operator and Helm charts:
 
 ```bash
-helm install my-keystonedb keystonedb/keystonedb \
+helm install my-keystonedb keystone-db/keystonedb \
   --set replicas=3 \
   --set storage.size=100Gi \
   --set monitoring.enabled=true
@@ -643,14 +643,14 @@ KeystoneDB is open source and welcomes contributions:
 ## Getting Involved
 
 **Stay Updated:**
-- GitHub: https://github.com/keystonedb/keystonedb
+- GitHub: https://github.com/keystone-db/keystonedb
 - Documentation: https://docs.keystonedb.io
 - Blog: https://keystonedb.io/blog
 - Twitter: @keystonedb
 
 **Community:**
 - Discord: https://discord.gg/keystonedb
-- GitHub Discussions: https://github.com/keystonedb/keystonedb/discussions
+- GitHub Discussions: https://github.com/keystone-db/keystonedb/discussions
 - Monthly community calls (see calendar)
 
 **Support:**

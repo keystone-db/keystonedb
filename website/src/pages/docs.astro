@@ -39,8 +39,61 @@ const docSections = [
       { num: 14, title: 'Transactions', href: '/docs/chapter-14' },
       { num: 15, title: 'Secondary Indexes', href: '/docs/chapter-15' },
       { num: 16, title: 'Time To Live (TTL)', href: '/docs/chapter-16' },
-      { num: 17, title: 'Streams & CDC', href: '/docs/chapter-17' },
+      { num: 17, title: 'Streams & Change Data Capture', href: '/docs/chapter-17' },
       { num: 18, title: 'PartiQL Query Language', href: '/docs/chapter-18' },
+    ],
+  },
+  {
+    title: 'Storage & Performance',
+    chapters: [
+      { num: 19, title: 'Write-Ahead Log (WAL)', href: '/docs/chapter-19' },
+      { num: 20, title: 'Sorted String Tables (SST)', href: '/docs/chapter-20' },
+      { num: 21, title: 'Compaction & Space Management', href: '/docs/chapter-21' },
+      { num: 22, title: 'Bloom Filters & Optimization', href: '/docs/chapter-22' },
+      { num: 23, title: 'Performance Tuning', href: '/docs/chapter-23' },
+    ],
+  },
+  {
+    title: 'Network & Distribution',
+    chapters: [
+      { num: 24, title: 'gRPC Server', href: '/docs/chapter-24' },
+      { num: 25, title: 'Remote Clients', href: '/docs/chapter-25' },
+      { num: 26, title: 'Network Architecture', href: '/docs/chapter-26' },
+    ],
+  },
+  {
+    title: 'CLI & Tools',
+    chapters: [
+      { num: 27, title: 'Command-Line Interface', href: '/docs/chapter-27' },
+      { num: 28, title: 'Interactive Shell (REPL)', href: '/docs/chapter-28' },
+      { num: 29, title: 'In-Memory Mode', href: '/docs/chapter-29' },
+    ],
+  },
+  {
+    title: 'Operations',
+    chapters: [
+      { num: 30, title: 'Deployment Guide', href: '/docs/chapter-30' },
+      { num: 31, title: 'Monitoring & Observability', href: '/docs/chapter-31' },
+      { num: 32, title: 'Backup & Recovery', href: '/docs/chapter-32' },
+      { num: 33, title: 'Troubleshooting', href: '/docs/chapter-33' },
+      { num: 34, title: 'Security Considerations', href: '/docs/chapter-34' },
+    ],
+  },
+  {
+    title: 'Development',
+    chapters: [
+      { num: 35, title: 'Building Applications with KeystoneDB', href: '/docs/chapter-35' },
+      { num: 36, title: 'API Reference', href: '/docs/chapter-36' },
+      { num: 37, title: 'Example Projects', href: '/docs/chapter-37' },
+    ],
+  },
+  {
+    title: 'Internals',
+    chapters: [
+      { num: 38, title: 'Concurrency Model', href: '/docs/chapter-38' },
+      { num: 39, title: 'File Formats & Encoding', href: '/docs/chapter-39' },
+      { num: 40, title: 'Recovery & Consistency', href: '/docs/chapter-40' },
+      { num: 41, title: 'Future Roadmap', href: '/docs/chapter-41' },
     ],
   },
 ];
@@ -132,11 +185,31 @@ const docSections = [
         ))}
       </div>
 
-      <!-- More Sections Note -->
-      <div class="card mt-8 text-center bg-gradient-to-r from-primary-50 to-accent-50 dark:from-primary-900/20 dark:to-accent-900/20 border-primary-200 dark:border-primary-800">
-        <p class="text-lg text-slate-700 dark:text-slate-300">
-          📚 <strong>Plus 23 more chapters</strong> covering Storage & Performance, Network & Distribution, Operations, Internals, and Appendices
-        </p>
+      <!-- Appendices -->
+      <div class="card mt-8">
+        <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-6">Appendices</h2>
+        <div class="grid md:grid-cols-2 gap-4">
+          <a href="/docs/appendix-a" class="flex items-center gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group">
+            <div class="w-10 h-10 rounded-full bg-accent-100 dark:bg-accent-900 flex items-center justify-center flex-shrink-0 text-accent-600 dark:text-accent-400 font-bold">A</div>
+            <span class="font-semibold text-slate-900 dark:text-white group-hover:text-accent-600">Error Reference</span>
+          </a>
+          <a href="/docs/appendix-b" class="flex items-center gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group">
+            <div class="w-10 h-10 rounded-full bg-accent-100 dark:bg-accent-900 flex items-center justify-center flex-shrink-0 text-accent-600 dark:text-accent-400 font-bold">B</div>
+            <span class="font-semibold text-slate-900 dark:text-white group-hover:text-accent-600">Configuration Reference</span>
+          </a>
+          <a href="/docs/appendix-c" class="flex items-center gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group">
+            <div class="w-10 h-10 rounded-full bg-accent-100 dark:bg-accent-900 flex items-center justify-center flex-shrink-0 text-accent-600 dark:text-accent-400 font-bold">C</div>
+            <span class="font-semibold text-slate-900 dark:text-white group-hover:text-accent-600">Wire Protocol</span>
+          </a>
+          <a href="/docs/appendix-d" class="flex items-center gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group">
+            <div class="w-10 h-10 rounded-full bg-accent-100 dark:bg-accent-900 flex items-center justify-center flex-shrink-0 text-accent-600 dark:text-accent-400 font-bold">D</div>
+            <span class="font-semibold text-slate-900 dark:text-white group-hover:text-accent-600">Benchmarks</span>
+          </a>
+          <a href="/docs/appendix-e" class="flex items-center gap-4 p-4 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors group">
+            <div class="w-10 h-10 rounded-full bg-accent-100 dark:bg-accent-900 flex items-center justify-center flex-shrink-0 text-accent-600 dark:text-accent-400 font-bold">E</div>
+            <span class="font-semibold text-slate-900 dark:text-white group-hover:text-accent-600">Migration Guide</span>
+          </a>
+        </div>
       </div>
     </div>
   </main>

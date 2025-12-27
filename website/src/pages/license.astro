@@ -1,0 +1,161 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { Scale, FileText } from 'lucide-react';
+---
+
+<BaseLayout title="License - KeystoneDB" description="KeystoneDB licensing information - MIT and Apache-2.0 dual license">
+  <Header />
+
+  <main class="py-20">
+    <div class="container mx-auto px-4 sm:px-6 lg:px-8">
+      <!-- Header -->
+      <div class="text-center mb-16">
+        <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-white mb-4">
+          License
+        </h1>
+        <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">
+          KeystoneDB is dual-licensed under MIT and Apache-2.0
+        </p>
+      </div>
+
+      <!-- License Overview -->
+      <div class="max-w-4xl mx-auto">
+        <div class="grid md:grid-cols-2 gap-8 mb-12">
+          <div class="card">
+            <div class="flex items-center gap-3 mb-4">
+              <Scale className="w-8 h-8 text-primary-600 dark:text-primary-400" />
+              <h2 class="text-2xl font-bold">MIT License</h2>
+            </div>
+            <p class="text-slate-600 dark:text-slate-300 mb-4">
+              A permissive license that allows commercial use, modification, distribution, and private use with minimal restrictions.
+            </p>
+            <ul class="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Commercial use</li>
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Modification</li>
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Distribution</li>
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Private use</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="flex items-center gap-3 mb-4">
+              <FileText className="w-8 h-8 text-accent-600 dark:text-accent-400" />
+              <h2 class="text-2xl font-bold">Apache-2.0 License</h2>
+            </div>
+            <p class="text-slate-600 dark:text-slate-300 mb-4">
+              A permissive license with patent protection, providing explicit grants of patent rights from contributors.
+            </p>
+            <ul class="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Commercial use</li>
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Patent protection</li>
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Modification</li>
+              <li class="flex gap-2"><span class="text-green-500">&#10003;</span> Distribution</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Why Dual License -->
+        <div class="card mb-12">
+          <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-4">
+            Why Dual License?
+          </h2>
+          <p class="text-slate-600 dark:text-slate-300 mb-4">
+            KeystoneDB uses the same dual-licensing approach as the Rust programming language itself. This gives you maximum flexibility:
+          </p>
+          <ul class="space-y-3 text-slate-600 dark:text-slate-300">
+            <li class="flex gap-3">
+              <span class="text-primary-600 dark:text-primary-400 font-bold">1.</span>
+              <span><strong>Choose either license</strong> - You can use KeystoneDB under either MIT or Apache-2.0, whichever better fits your needs.</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="text-primary-600 dark:text-primary-400 font-bold">2.</span>
+              <span><strong>MIT for simplicity</strong> - If you prefer a simple, short license with minimal requirements.</span>
+            </li>
+            <li class="flex gap-3">
+              <span class="text-primary-600 dark:text-primary-400 font-bold">3.</span>
+              <span><strong>Apache-2.0 for patent protection</strong> - If you need explicit patent grants for enterprise use.</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Full License Text -->
+        <div class="card">
+          <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-6">
+            License Text
+          </h2>
+
+          <div class="space-y-8">
+            <div>
+              <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">MIT License</h3>
+              <div class="bg-slate-100 dark:bg-slate-800 rounded-lg p-4 font-mono text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
+Copyright (c) 2024 KeystoneDB Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+              </div>
+            </div>
+
+            <div>
+              <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Apache License 2.0</h3>
+              <p class="text-slate-600 dark:text-slate-300 mb-4">
+                The full Apache-2.0 license text is available at:
+              </p>
+              <a
+                href="https://www.apache.org/licenses/LICENSE-2.0"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-outline"
+              >
+                View Apache-2.0 License
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- License Files -->
+        <div class="mt-8 text-center">
+          <p class="text-slate-600 dark:text-slate-400 mb-4">
+            License files are also included in the repository:
+          </p>
+          <div class="flex flex-wrap justify-center gap-4">
+            <a
+              href="https://github.com/keystone-db/keystonedb/blob/main/LICENSE-MIT"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-primary-600 dark:text-primary-400 hover:underline"
+            >
+              LICENSE-MIT
+            </a>
+            <a
+              href="https://github.com/keystone-db/keystonedb/blob/main/LICENSE-APACHE"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-primary-600 dark:text-primary-400 hover:underline"
+            >
+              LICENSE-APACHE
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

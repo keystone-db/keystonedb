@@ -45,8 +45,8 @@ import { ArrowRight, Github, Download } from 'lucide-react';
             <div class="text-sm text-slate-600 dark:text-slate-400">reads/sec</div>
           </div>
           <div>
-            <div class="text-3xl font-bold text-primary-600 dark:text-primary-400">Zero</div>
-            <div class="text-sm text-slate-600 dark:text-slate-400">dependencies</div>
+            <div class="text-3xl font-bold text-primary-600 dark:text-primary-400">Single</div>
+            <div class="text-sm text-slate-600 dark:text-slate-400">file storage</div>
           </div>
         </div>
 
@@ -60,7 +60,7 @@ import { ArrowRight, Github, Download } from 'lucide-react';
             <Download className="w-5 h-5" />
             Download
           </a>
-          <a href="https://github.com/keystonedb/keystonedb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+          <a href="https://github.com/keystone-db/keystonedb" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
             <Github className="w-5 h-5" />
             GitHub
           </a>
@@ -68,9 +68,9 @@ import { ArrowRight, Github, Download } from 'lucide-react';
 
         <!-- Quick Install -->
         <div class="pt-4">
-          <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">Quick install:</p>
+          <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">Add to your project:</p>
           <div class="bg-slate-900 dark:bg-slate-950 rounded-lg p-4 font-mono text-sm">
-            <code class="text-green-400">$</code> <code class="text-slate-300">cargo build --release</code>
+            <code class="text-green-400">$</code> <code class="text-slate-300">cargo add kstone-api</code>
           </div>
         </div>
       </div>
@@ -84,7 +84,7 @@ import { ArrowRight, Github, Download } from 'lucide-react';
             <div class="w-3 h-3 rounded-full bg-green-500"></div>
             <span class="ml-2 text-slate-400 text-sm font-mono">main.rs</span>
           </div>
-          <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="language-rust">use kstone_api::&#123;Database, ItemBuilder&#125;;
+          <pre class="!bg-transparent !my-0 text-sm overflow-x-auto"><code class="language-rust">use kstone_api::&#123;Database, ItemBuilder, Query, Update&#125;;
 
 // Create database
 let db = Database::create("mydb.keystone")?;
@@ -98,13 +98,15 @@ let item = ItemBuilder::new()
 
 db.put(b"user#123", item)?;
 
-// Query with PartiQL
-let results = db.query(
-    "SELECT * FROM items WHERE pk = 'user#123'"
-)?;
+// Query items
+let query = Query::new(b"user#123");
+let results = db.query(query)?;
 
 // Update with expressions
-db.update(b"user#123", "SET age = age + 1")?;</code></pre>
+let update = Update::new(b"user#123")
+    .expression("SET age = age + :inc")
+    .value(":inc", Value::number(1));
+db.update(update)?;</code></pre>
         </div>
       </div>
     </div>
