@@ -2,9 +2,12 @@
 ///
 /// Provides APIs for getting or writing multiple items in a single operation.
 
-use kstone_core::{Item, Key};
+use kstone_core::{Item, Key, Error, Result};
 use bytes::Bytes;
 use std::collections::HashMap;
+
+/// Maximum number of items in batch operations (matches DynamoDB limit)
+const MAX_BATCH_SIZE: usize = 100;
 
 /// Batch get request
 #[derive(Debug, Clone)]
@@ -37,6 +40,16 @@ impl BatchGetRequest {
     /// Get the keys
     pub fn keys(&self) -> &[Key] {
         &self.keys
+    }
+
+    /// Validate the batch size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.keys.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Batch size {} exceeds maximum {}", self.keys.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -123,6 +136,16 @@ impl BatchWriteRequest {
     /// Get the items
     pub fn items(&self) -> &[BatchWriteItem] {
         &self.items
+    }
+
+    /// Validate the batch size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.items.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Batch size {} exceeds maximum {}", self.items.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 

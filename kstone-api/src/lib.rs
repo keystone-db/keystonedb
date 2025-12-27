@@ -395,6 +395,9 @@ impl Database {
 
     /// Batch get multiple items (Phase 2.6+)
     pub fn batch_get(&self, request: BatchGetRequest) -> Result<BatchGetResponse> {
+        // Validate batch size
+        request.validate()?;
+
         let results = match &self.engine {
             DatabaseEngine::Disk(e) => e.batch_get(request.keys())?,
             DatabaseEngine::Memory(e) => e.batch_get(request.keys())?,
@@ -412,6 +415,9 @@ impl Database {
 
     /// Batch write multiple items (Phase 2.6+)
     pub fn batch_write(&self, request: BatchWriteRequest) -> Result<BatchWriteResponse> {
+        // Validate batch size
+        request.validate()?;
+
         // Convert batch write request to operations
         let mut operations = Vec::new();
 
@@ -435,6 +441,9 @@ impl Database {
 
     /// Transactional get - read multiple items atomically (Phase 2.7+)
     pub fn transact_get(&self, request: TransactGetRequest) -> Result<TransactGetResponse> {
+        // Validate transaction size
+        request.validate()?;
+
         let items = match &self.engine {
             DatabaseEngine::Disk(e) => e.transact_get(request.keys())?,
             DatabaseEngine::Memory(e) => e.transact_get(request.keys())?,
@@ -444,6 +453,9 @@ impl Database {
 
     /// Transactional write - write multiple items atomically with conditions (Phase 2.7+)
     pub fn transact_write(&self, request: TransactWriteRequest) -> Result<TransactWriteResponse> {
+        // Validate transaction size
+        request.validate()?;
+
         use kstone_core::{TransactWriteOperation, expression::ExpressionParser};
 
         // Convert API operations to core operations

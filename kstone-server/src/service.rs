@@ -16,6 +16,9 @@ use crate::convert::*;
 use crate::metrics::{RPC_REQUESTS_TOTAL, RPC_DURATION_SECONDS};
 use crate::rate_limit::RateLimiter;
 
+/// Maximum number of items in batch operations (matches DynamoDB limit)
+const MAX_BATCH_SIZE: usize = 100;
+
 /// KeystoneDB gRPC service implementation
 pub struct KeystoneService {
     db: Arc<Database>,
@@ -498,6 +501,13 @@ impl KeystoneDb for KeystoneService {
 
         let req = request.into_inner();
 
+        // Validate batch size to prevent DoS
+        if req.keys.len() > MAX_BATCH_SIZE {
+            return Err(Status::invalid_argument(
+                format!("Batch size {} exceeds maximum {}", req.keys.len(), MAX_BATCH_SIZE)
+            ));
+        }
+
         // Convert protobuf keys to core Keys
         let mut batch_request = kstone_api::BatchGetRequest::new();
         for proto_key in req.keys {
@@ -546,6 +556,13 @@ impl KeystoneDb for KeystoneService {
         use proto::write_request::Request as WriteRequestEnum;
 
         let req = request.into_inner();
+
+        // Validate batch size to prevent DoS
+        if req.writes.len() > MAX_BATCH_SIZE {
+            return Err(Status::invalid_argument(
+                format!("Batch size {} exceeds maximum {}", req.writes.len(), MAX_BATCH_SIZE)
+            ));
+        }
 
         // Build batch write request
         let mut batch_request = kstone_api::BatchWriteRequest::new();
@@ -616,6 +633,13 @@ impl KeystoneDb for KeystoneService {
 
         let req = request.into_inner();
 
+        // Validate batch size to prevent DoS
+        if req.keys.len() > MAX_BATCH_SIZE {
+            return Err(Status::invalid_argument(
+                format!("Transaction size {} exceeds maximum {}", req.keys.len(), MAX_BATCH_SIZE)
+            ));
+        }
+
         // Build transact get request with all keys
         let mut transact_request = kstone_api::TransactGetRequest::new();
         for proto_key in req.keys {
@@ -665,6 +689,13 @@ impl KeystoneDb for KeystoneService {
         use proto::transact_write_item::Item as ProtoTxItem;
 
         let req = request.into_inner();
+
+        // Validate batch size to prevent DoS
+        if req.items.len() > MAX_BATCH_SIZE {
+            return Err(Status::invalid_argument(
+                format!("Transaction size {} exceeds maximum {}", req.items.len(), MAX_BATCH_SIZE)
+            ));
+        }
 
         // Build transact write request with all operations
         let mut transact_request = kstone_api::TransactWriteRequest::new();
@@ -1655,6 +1686,111 @@ mod tests {
         // Should return at most 5 items
         assert!(response.count <= 5);
         assert!(response.items.len() <= 5);
+    }
+
+    #[tokio::test]
+    async fn test_batch_get_exceeds_limit() {
+        let (service, _dir) = create_test_service();
+
+        // Create 101 keys (exceeds MAX_BATCH_SIZE of 100)
+        let keys = (0..101)
+            .map(|i| proto::Key {
+                partition_key: format!("item#{}", i).into_bytes(),
+                sort_key: None,
+            })
+            .collect();
+
+        let batch_get_req = Request::new(proto::BatchGetRequest { keys });
+
+        let result = service.batch_get(batch_get_req).await;
+        assert!(result.is_err());
+
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("exceeds maximum 100"));
+    }
+
+    #[tokio::test]
+    async fn test_batch_write_exceeds_limit() {
+        let (service, _dir) = create_test_service();
+
+        // Create 101 write requests (exceeds MAX_BATCH_SIZE of 100)
+        let writes = (0..101)
+            .map(|i| proto::WriteRequest {
+                request: Some(proto::write_request::Request::Put(proto::PutItem {
+                    partition_key: format!("item#{}", i).into_bytes(),
+                    sort_key: None,
+                    item: Some(proto_item({
+                        let mut attrs = HashMap::new();
+                        attrs.insert("data".to_string(), proto_string("test"));
+                        attrs
+                    })),
+                })),
+            })
+            .collect();
+
+        let batch_write_req = Request::new(proto::BatchWriteRequest { writes });
+
+        let result = service.batch_write(batch_write_req).await;
+        assert!(result.is_err());
+
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("exceeds maximum 100"));
+    }
+
+    #[tokio::test]
+    async fn test_transact_get_exceeds_limit() {
+        let (service, _dir) = create_test_service();
+
+        // Create 101 keys (exceeds MAX_BATCH_SIZE of 100)
+        let keys = (0..101)
+            .map(|i| proto::Key {
+                partition_key: format!("item#{}", i).into_bytes(),
+                sort_key: None,
+            })
+            .collect();
+
+        let transact_get_req = Request::new(proto::TransactGetRequest { keys });
+
+        let result = service.transact_get(transact_get_req).await;
+        assert!(result.is_err());
+
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("exceeds maximum 100"));
+    }
+
+    #[tokio::test]
+    async fn test_transact_write_exceeds_limit() {
+        let (service, _dir) = create_test_service();
+
+        // Create 101 transaction items (exceeds MAX_BATCH_SIZE of 100)
+        let items = (0..101)
+            .map(|i| proto::TransactWriteItem {
+                item: Some(proto::transact_write_item::Item::Put(proto::TransactPut {
+                    partition_key: format!("item#{}", i).into_bytes(),
+                    sort_key: None,
+                    item: Some(proto_item({
+                        let mut attrs = HashMap::new();
+                        attrs.insert("data".to_string(), proto_string("test"));
+                        attrs
+                    })),
+                    condition_expression: None,
+                })),
+            })
+            .collect();
+
+        let transact_write_req = Request::new(proto::TransactWriteRequest {
+            items,
+        });
+
+        let result = service.transact_write(transact_write_req).await;
+        assert!(result.is_err());
+
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("exceeds maximum 100"));
     }
 
     // ============================================================================

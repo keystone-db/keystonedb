@@ -5,7 +5,7 @@
 use axum::{routing::get, Router};
 use clap::Parser;
 use kstone_api::Database;
-use kstone_server::{ConnectionManager, KeystoneDbServer, KeystoneService, RateLimiter, metrics};
+use kstone_server::{AuthInterceptor, ConnectionManager, KeystoneDbServer, KeystoneService, RateLimiter, metrics};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,6 +61,11 @@ struct Args {
     /// Path to TLS CA certificate file (enables mTLS client verification)
     #[arg(long, value_name = "FILE")]
     tls_ca: Option<PathBuf>,
+
+    /// API key for authentication (optional, if not set server runs without auth for dev mode)
+    /// Clients must send "authorization: Bearer <key>" header with this key
+    #[arg(long, value_name = "KEY")]
+    api_key: Option<String>,
 }
 
 async fn metrics_handler() -> String {
@@ -252,7 +257,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure TLS if certificates are provided
     let tls_config = configure_tls(args.tls_cert, args.tls_key, args.tls_ca)?;
 
-    // Create gRPC service
+    // Create authentication interceptor
+    let auth = AuthInterceptor::new(args.api_key.clone());
+    if auth.is_enabled() {
+        info!("Authentication enabled: API key required for all requests");
+    } else {
+        warn!("⚠️  WARNING: Server running without authentication (dev mode)");
+        warn!("⚠️  All requests will be accepted without API key verification");
+        warn!("⚠️  Use --api-key <KEY> to enable authentication in production");
+    }
+
+    // Create gRPC service with authentication interceptor
     let service = KeystoneService::new(db, Arc::clone(&rate_limiter));
     let grpc_addr = format!("{}:{}", args.host, args.port).parse()?;
 
@@ -290,7 +305,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_builder = server_builder.tls_config(tls)?;
     }
 
-    let server = server_builder.add_service(KeystoneDbServer::new(service));
+    // Apply authentication interceptor to the service
+    let server = server_builder.add_service(
+        KeystoneDbServer::with_interceptor(service, move |req| {
+            auth.intercept(req)
+        })
+    );
 
     // Start gRPC server with graceful shutdown
     info!(

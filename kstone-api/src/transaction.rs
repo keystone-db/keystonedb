@@ -2,11 +2,14 @@
 ///
 /// Provides ACID transaction support with atomic reads and writes.
 
-use kstone_core::{Item, Key};
+use kstone_core::{Item, Key, Error, Result};
 use bytes::Bytes;
 
 #[cfg(test)]
 use std::collections::HashMap;
+
+/// Maximum number of items in transaction operations (matches DynamoDB limit)
+const MAX_BATCH_SIZE: usize = 100;
 
 /// Transaction get request - read multiple items atomically
 #[derive(Debug, Clone)]
@@ -39,6 +42,16 @@ impl TransactGetRequest {
     /// Get the keys
     pub fn keys(&self) -> &[Key] {
         &self.keys
+    }
+
+    /// Validate the transaction size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.keys.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Transaction size {} exceeds maximum {}", self.keys.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -291,6 +304,16 @@ impl TransactWriteRequest {
     /// Get the context
     pub fn context(&self) -> &kstone_core::expression::ExpressionContext {
         &self.context
+    }
+
+    /// Validate the transaction size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.operations.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Transaction size {} exceeds maximum {}", self.operations.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 

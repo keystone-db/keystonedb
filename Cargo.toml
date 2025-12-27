@@ -35,7 +35,7 @@ categories = ["database", "database-implementations"]
 # Common dependencies
 anyhow = "1.0"
 thiserror = "1.0"
-bytes = { version = "1.5", features = ["serde"] }
+bytes = { version = "1.10", features = ["serde"] }
 parking_lot = "0.12"
 crossbeam = "0.8"
 tracing = "0.1"
@@ -89,5 +89,5 @@ governor = "0.6"
 
 # Examples dependencies
 nanoid = "0.4"
-uuid = { version = "1.6", features = ["v4", "serde"] }
+uuid = { version = "1.18", features = ["v4", "serde"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
