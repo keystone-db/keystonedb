@@ -35,11 +35,12 @@ pub(crate) fn parse_execute_statement_response(
 
     match proto_response {
         ProtoResponse::Select(select_result) => {
-            let items: Vec<Item> = select_result
+            let items: Result<Vec<Item>> = select_result
                 .items
                 .into_iter()
-                .map(|proto_item| proto_item_to_ks(proto_item).expect("Invalid item from server"))
+                .map(|proto_item| proto_item_to_ks(proto_item).map_err(ClientError::from))
                 .collect();
+            let items = items?;
 
             let last_key = select_result
                 .last_key
@@ -58,9 +59,11 @@ pub(crate) fn parse_execute_statement_response(
             })
         }
         ProtoResponse::Update(update_result) => {
-            let item = proto_item_to_ks(
-                update_result.item.expect("Server should return updated item")
-            )?;
+            let proto_item = update_result.item
+                .ok_or_else(|| ClientError::InternalError("Server did not return updated item".into()))?;
+
+            let item = proto_item_to_ks(proto_item)
+                .map_err(ClientError::from)?;
 
             Ok(RemoteExecuteStatementResponse::Update { item })
         }

@@ -1,9 +1,8 @@
 /// Remote transaction operations
 use crate::convert::*;
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use kstone_core::Item;
 use kstone_proto::{self as proto, keystone_db_client::KeystoneDbClient};
-use tonic::transport::Channel;
 
 /// Remote transact get request builder
 pub struct RemoteTransactGetRequest {
@@ -35,7 +34,13 @@ impl RemoteTransactGetRequest {
     }
 
     /// Execute the transact get operation
-    pub async fn execute(self, client: &mut KeystoneDbClient<Channel>) -> Result<RemoteTransactGetResponse> {
+    pub async fn execute<T>(self, client: &mut KeystoneDbClient<T>) -> Result<RemoteTransactGetResponse>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody> + Send + 'static,
+        T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        T::ResponseBody: tonic::codegen::Body<Data = bytes::Bytes> + Send + 'static,
+        <T::ResponseBody as tonic::codegen::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    {
         let request = proto::TransactGetRequest {
             keys: self.keys,
         };
@@ -46,15 +51,20 @@ impl RemoteTransactGetRequest {
             .into_inner();
 
         // Convert protobuf response to Rust types
-        let items: Vec<Option<Item>> = response
+        let items: Result<Vec<Option<Item>>> = response
             .items
             .into_iter()
             .map(|tx_item| {
-                tx_item.item.map(|proto_item| {
-                    proto_item_to_ks(proto_item).expect("Invalid item from server")
-                })
+                match tx_item.item {
+                    Some(proto_item) => {
+                        let item = proto_item_to_ks(proto_item).map_err(ClientError::from)?;
+                        Ok(Some(item))
+                    }
+                    None => Ok(None),
+                }
             })
             .collect();
+        let items = items?;
 
         Ok(RemoteTransactGetResponse { items })
     }
@@ -147,7 +157,13 @@ impl RemoteTransactWriteRequest {
     }
 
     /// Execute the transact write operation
-    pub async fn execute(self, client: &mut KeystoneDbClient<Channel>) -> Result<()> {
+    pub async fn execute<T>(self, client: &mut KeystoneDbClient<T>) -> Result<()>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody> + Send + 'static,
+        T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        T::ResponseBody: tonic::codegen::Body<Data = bytes::Bytes> + Send + 'static,
+        <T::ResponseBody as tonic::codegen::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    {
         let request = proto::TransactWriteRequest {
             items: self.writes,
         };

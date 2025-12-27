@@ -1,9 +1,8 @@
 /// Remote batch operations
 use crate::convert::*;
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use kstone_core::Item;
 use kstone_proto::{self as proto, keystone_db_client::KeystoneDbClient};
-use tonic::transport::Channel;
 
 /// Remote batch get request builder
 pub struct RemoteBatchGetRequest {
@@ -35,7 +34,13 @@ impl RemoteBatchGetRequest {
     }
 
     /// Execute the batch get operation
-    pub async fn execute(self, client: &mut KeystoneDbClient<Channel>) -> Result<RemoteBatchGetResponse> {
+    pub async fn execute<T>(self, client: &mut KeystoneDbClient<T>) -> Result<RemoteBatchGetResponse>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody> + Send + 'static,
+        T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        T::ResponseBody: tonic::codegen::Body<Data = bytes::Bytes> + Send + 'static,
+        <T::ResponseBody as tonic::codegen::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    {
         let request = proto::BatchGetRequest {
             keys: self.keys,
         };
@@ -46,11 +51,12 @@ impl RemoteBatchGetRequest {
             .into_inner();
 
         // Convert protobuf response to Rust types
-        let items: Vec<Item> = response
+        let items: Result<Vec<Item>> = response
             .items
             .into_iter()
-            .map(|proto_item| proto_item_to_ks(proto_item).expect("Invalid item from server"))
+            .map(|proto_item| proto_item_to_ks(proto_item).map_err(ClientError::from))
             .collect();
+        let items = items?;
 
         Ok(RemoteBatchGetResponse {
             items,
@@ -131,7 +137,13 @@ impl RemoteBatchWriteRequest {
     }
 
     /// Execute the batch write operation
-    pub async fn execute(self, client: &mut KeystoneDbClient<Channel>) -> Result<RemoteBatchWriteResponse> {
+    pub async fn execute<T>(self, client: &mut KeystoneDbClient<T>) -> Result<RemoteBatchWriteResponse>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody> + Send + 'static,
+        T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        T::ResponseBody: tonic::codegen::Body<Data = bytes::Bytes> + Send + 'static,
+        <T::ResponseBody as tonic::codegen::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    {
         let request = proto::BatchWriteRequest {
             writes: self.writes,
         };

@@ -1,10 +1,9 @@
 /// Remote scan builder and response types
 use crate::convert::*;
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use bytes::Bytes;
 use kstone_core::Item;
 use kstone_proto::{self as proto, keystone_db_client::KeystoneDbClient};
-use tonic::transport::Channel;
 use tonic::Streaming;
 
 /// Remote scan builder
@@ -60,10 +59,16 @@ impl RemoteScan {
     ///
     /// Note: The server currently returns a single response, but this
     /// interface is prepared for future streaming support.
-    pub async fn execute(
+    pub async fn execute<T>(
         self,
-        client: &mut KeystoneDbClient<Channel>,
-    ) -> Result<RemoteScanResponse> {
+        client: &mut KeystoneDbClient<T>,
+    ) -> Result<RemoteScanResponse>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody> + Send + 'static,
+        T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        T::ResponseBody: tonic::codegen::Body<Data = bytes::Bytes> + Send + 'static,
+        <T::ResponseBody as tonic::codegen::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    {
         let request = proto::ScanRequest {
             filter_expression: None,
             expression_values: std::collections::HashMap::new(),
@@ -86,11 +91,12 @@ impl RemoteScan {
         let mut last_key = None;
 
         while let Some(response) = stream.message().await? {
-            let items: Vec<Item> = response
+            let items: Result<Vec<Item>> = response
                 .items
                 .into_iter()
-                .map(|proto_item| proto_item_to_ks(proto_item).expect("Invalid item from server"))
+                .map(|proto_item| proto_item_to_ks(proto_item).map_err(ClientError::from))
                 .collect();
+            let items = items?;
 
             total_count += response.count as usize;
             total_scanned_count += response.scanned_count as usize;
