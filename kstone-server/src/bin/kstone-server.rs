@@ -49,6 +49,18 @@ struct Args {
     /// Max total requests per second (0 = unlimited)
     #[arg(long, default_value = "0")]
     max_rps_global: u32,
+
+    /// Path to TLS certificate file (enables TLS)
+    #[arg(long, value_name = "FILE")]
+    tls_cert: Option<PathBuf>,
+
+    /// Path to TLS private key file (required if --tls-cert is set)
+    #[arg(long, value_name = "FILE")]
+    tls_key: Option<PathBuf>,
+
+    /// Path to TLS CA certificate file (enables mTLS client verification)
+    #[arg(long, value_name = "FILE")]
+    tls_ca: Option<PathBuf>,
 }
 
 async fn metrics_handler() -> String {
@@ -66,20 +78,101 @@ async fn ready_handler() -> &'static str {
     "OK"
 }
 
+/// Configure TLS settings if certificates are provided
+fn configure_tls(
+    tls_cert: Option<PathBuf>,
+    tls_key: Option<PathBuf>,
+    tls_ca: Option<PathBuf>,
+) -> Result<Option<tonic::transport::ServerTlsConfig>, Box<dyn std::error::Error>> {
+    // If no TLS cert provided, return None (no TLS)
+    let cert_path = match tls_cert {
+        Some(path) => path,
+        None => {
+            if tls_key.is_some() || tls_ca.is_some() {
+                return Err("--tls-key and --tls-ca require --tls-cert to be set".into());
+            }
+            return Ok(None);
+        }
+    };
+
+    // TLS cert provided, so TLS key is required
+    let key_path = tls_key.ok_or("--tls-cert requires --tls-key to be set")?;
+
+    // Validate that cert and key files exist
+    if !cert_path.exists() {
+        return Err(format!("TLS certificate file not found: {:?}", cert_path).into());
+    }
+    if !key_path.exists() {
+        return Err(format!("TLS key file not found: {:?}", key_path).into());
+    }
+
+    // Read certificate and key files
+    let cert = std::fs::read_to_string(&cert_path)
+        .map_err(|e| format!("Failed to read TLS certificate from {:?}: {}", cert_path, e))?;
+    let key = std::fs::read_to_string(&key_path)
+        .map_err(|e| format!("Failed to read TLS key from {:?}: {}", key_path, e))?;
+
+    // Create TLS identity from cert and key
+    let identity = tonic::transport::Identity::from_pem(cert, key);
+
+    // Build TLS config
+    let mut tls_config = tonic::transport::ServerTlsConfig::new().identity(identity);
+
+    // If CA certificate is provided, enable mTLS (client certificate verification)
+    if let Some(ca_path) = tls_ca {
+        if !ca_path.exists() {
+            return Err(format!("TLS CA certificate file not found: {:?}", ca_path).into());
+        }
+
+        let ca_cert = std::fs::read_to_string(&ca_path)
+            .map_err(|e| format!("Failed to read TLS CA certificate from {:?}: {}", ca_path, e))?;
+
+        let ca = tonic::transport::Certificate::from_pem(ca_cert);
+        tls_config = tls_config.client_ca_root(ca);
+
+        info!("mTLS enabled: client certificate verification required");
+    } else {
+        info!("TLS enabled: server certificate only (no client verification)");
+    }
+
+    Ok(Some(tls_config))
+}
+
 /// Wait for shutdown signal (SIGTERM, SIGINT, or Ctrl+C)
+///
+/// This function will gracefully handle signal registration failures by logging
+/// errors instead of panicking. If signal handlers fail to register, the server
+/// will continue running but won't respond to signals (requiring manual termination).
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
+        match signal::ctrl_c().await {
+            Ok(()) => (),
+            Err(err) => {
+                tracing::error!(
+                    "Failed to register Ctrl+C signal handler: {}. Server will not respond to Ctrl+C.",
+                    err
+                );
+                // Wait forever since we can't handle the signal
+                std::future::pending::<()>().await
+            }
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler")
-            .recv()
-            .await;
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(err) => {
+                tracing::error!(
+                    "Failed to register SIGTERM signal handler: {}. Server will not respond to SIGTERM.",
+                    err
+                );
+                // Wait forever since we can't handle the signal
+                std::future::pending::<()>().await
+            }
+        }
     };
 
     #[cfg(not(unix))]
@@ -115,7 +208,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     // Initialize Prometheus metrics
-    metrics::register_metrics();
+    metrics::register_metrics()
+        .map_err(|e| format!("Failed to initialize Prometheus metrics: {}", e))?;
     info!("Initialized Prometheus metrics");
 
     // Parse command line arguments
@@ -155,11 +249,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Database::create(&args.db_path)?
     };
 
+    // Configure TLS if certificates are provided
+    let tls_config = configure_tls(args.tls_cert, args.tls_key, args.tls_ca)?;
+
     // Create gRPC service
     let service = KeystoneService::new(db, Arc::clone(&rate_limiter));
     let grpc_addr = format!("{}:{}", args.host, args.port).parse()?;
 
-    info!("Starting KeystoneDB gRPC server on {}", grpc_addr);
+    if tls_config.is_some() {
+        info!("Starting KeystoneDB gRPC server on {} with TLS", grpc_addr);
+    } else {
+        info!("Starting KeystoneDB gRPC server on {} (no TLS)", grpc_addr);
+    }
 
     // Create HTTP server for metrics and health checks
     let metrics_app = Router::new()
@@ -178,12 +279,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Configure server with connection settings
-    let server = Server::builder()
+    // Configure server with connection settings and optional TLS
+    let mut server_builder = Server::builder()
         .timeout(Duration::from_secs(args.connection_timeout))
         .tcp_keepalive(Some(Duration::from_secs(30)))
-        .tcp_nodelay(true)
-        .add_service(KeystoneDbServer::new(service));
+        .tcp_nodelay(true);
+
+    // Apply TLS configuration if provided
+    if let Some(tls) = tls_config {
+        server_builder = server_builder.tls_config(tls)?;
+    }
+
+    let server = server_builder.add_service(KeystoneDbServer::new(service));
 
     // Start gRPC server with graceful shutdown
     info!(

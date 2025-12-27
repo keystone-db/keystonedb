@@ -26,7 +26,7 @@ lazy_static! {
         ),
         &["method", "status"]
     )
-    .unwrap();
+    .expect("Failed to create RPC_REQUESTS_TOTAL metric - metric name may be invalid or already registered");
 
     /// RPC request duration in seconds
     ///
@@ -42,7 +42,7 @@ lazy_static! {
         ),
         &["method"]
     )
-    .unwrap();
+    .expect("Failed to create RPC_DURATION_SECONDS metric - metric name may be invalid or already registered");
 
     /// Number of active gRPC connections
     pub static ref ACTIVE_CONNECTIONS: IntGauge = register_int_gauge!(
@@ -51,7 +51,7 @@ lazy_static! {
             "Number of active gRPC connections"
         )
     )
-    .unwrap();
+    .expect("Failed to create ACTIVE_CONNECTIONS metric - metric name may be invalid or already registered");
 
     /// Total number of database operations by operation type and status
     ///
@@ -65,7 +65,7 @@ lazy_static! {
         ),
         &["operation", "status"]
     )
-    .unwrap();
+    .expect("Failed to create DB_OPERATIONS_TOTAL metric - metric name may be invalid or already registered");
 
     /// Total number of errors by error type
     ///
@@ -78,7 +78,7 @@ lazy_static! {
         ),
         &["error_type"]
     )
-    .unwrap();
+    .expect("Failed to create ERRORS_TOTAL metric - metric name may be invalid or already registered");
 
     /// Total number of rate-limited requests
     ///
@@ -91,34 +91,39 @@ lazy_static! {
         ),
         &["limit_type"]
     )
-    .unwrap();
+    .expect("Failed to create RATE_LIMITED_REQUESTS metric - metric name may be invalid or already registered");
 }
 
 /// Register all metrics with the global registry
-pub fn register_metrics() {
+///
+/// Returns an error if any metric fails to register (e.g., duplicate registration).
+/// This should only be called once during server startup.
+pub fn register_metrics() -> Result<(), Box<dyn std::error::Error>> {
     REGISTRY
         .register(Box::new(RPC_REQUESTS_TOTAL.clone()))
-        .expect("Failed to register RPC_REQUESTS_TOTAL");
+        .map_err(|e| format!("Failed to register RPC_REQUESTS_TOTAL metric: {}", e))?;
 
     REGISTRY
         .register(Box::new(RPC_DURATION_SECONDS.clone()))
-        .expect("Failed to register RPC_DURATION_SECONDS");
+        .map_err(|e| format!("Failed to register RPC_DURATION_SECONDS metric: {}", e))?;
 
     REGISTRY
         .register(Box::new(ACTIVE_CONNECTIONS.clone()))
-        .expect("Failed to register ACTIVE_CONNECTIONS");
+        .map_err(|e| format!("Failed to register ACTIVE_CONNECTIONS metric: {}", e))?;
 
     REGISTRY
         .register(Box::new(DB_OPERATIONS_TOTAL.clone()))
-        .expect("Failed to register DB_OPERATIONS_TOTAL");
+        .map_err(|e| format!("Failed to register DB_OPERATIONS_TOTAL metric: {}", e))?;
 
     REGISTRY
         .register(Box::new(ERRORS_TOTAL.clone()))
-        .expect("Failed to register ERRORS_TOTAL");
+        .map_err(|e| format!("Failed to register ERRORS_TOTAL metric: {}", e))?;
 
     REGISTRY
         .register(Box::new(RATE_LIMITED_REQUESTS.clone()))
-        .expect("Failed to register RATE_LIMITED_REQUESTS");
+        .map_err(|e| format!("Failed to register RATE_LIMITED_REQUESTS metric: {}", e))?;
+
+    Ok(())
 }
 
 /// Encode metrics in Prometheus text format
