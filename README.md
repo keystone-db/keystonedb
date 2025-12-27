@@ -203,7 +203,8 @@ kstone query mydb.keystone "SELECT * FROM users" --limit 100
 ## Rust API
 
 ```rust
-use kstone_api::{Database, ItemBuilder, Query, Scan};
+use kstone_api::{Database, ItemBuilder, Query, Scan, Update, HealthStatus};
+use kstone_core::{Value, expression::ExpressionContext};
 
 // Create or open database
 let db = Database::create("mydb.keystone")?;
@@ -277,17 +278,27 @@ let txn_write = TransactWriteRequest::new()
 let response = db.transact_write(txn_write)?;
 
 // Conditional operations
-db.put_if_not_exists(b"user#123", item)?;
-
-db.update(
+db.put_conditional(
     b"user#123",
-    "SET age = :new_age",
-    Some("age < :new_age"),
+    item.clone(),
+    "attribute_not_exists(pk)",
+    ExpressionContext::new(),
 )?;
 
+let update = Update::new(b"user#123")
+    .expression("SET age = :new_age")
+    .condition("age < :new_age")
+    .value(":new_age", Value::number(30));
+db.update(update)?;
+
 // Update expressions
-db.update(b"user#123", "SET age = age + 1, visits = visits + 1", None)?;
-db.update(b"user#123", "REMOVE temp_field", None)?;
+let update = Update::new(b"user#123")
+    .expression("SET age = age + 1, visits = visits + 1");
+db.update(update)?;
+
+let update = Update::new(b"user#123")
+    .expression("REMOVE temp_field");
+db.update(update)?;
 
 // Database statistics and health (Phase 8+)
 let stats = db.stats()?;
@@ -415,7 +426,8 @@ kstone-server --db-path mydb.keystone \
 ### Rust Client
 
 ```rust
-use kstone_client::{Client, RemoteQuery};
+use kstone_client::{Client, RemoteQuery, Value};
+use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
