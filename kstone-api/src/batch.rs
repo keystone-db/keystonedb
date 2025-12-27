@@ -78,6 +78,7 @@ impl BatchGetResponse {
 }
 
 /// Batch write request item
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum BatchWriteItem {
     /// Put an item

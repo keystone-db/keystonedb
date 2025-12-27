@@ -95,6 +95,7 @@ pub struct DatabaseStats {
 }
 
 /// Database health status
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthStatus {
     /// Database is fully operational

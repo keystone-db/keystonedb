@@ -75,6 +75,7 @@ impl TransactGetResponse {
 }
 
 /// Transaction write operation
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum TransactWriteOp {
     /// Put an item with optional condition
