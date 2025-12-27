@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Type constraint for an attribute
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttributeType {
     String,
@@ -37,6 +38,7 @@ impl AttributeType {
 }
 
 /// Value constraint for an attribute
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ValueConstraint {
     /// Minimum value (for numbers)

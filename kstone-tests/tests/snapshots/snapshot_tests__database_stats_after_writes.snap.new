@@ -1,0 +1,8 @@
+---
+source: kstone-tests/tests/snapshot_tests.rs
+assertion_line: 117
+expression: stable_stats
+---
+has_wal: false
+total_sst_files: 96
+has_keys: false

@@ -93,6 +93,7 @@ struct LsmInner {
 }
 
 /// Transaction write operation (Phase 2.7+)
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum TransactWriteOperation {
     /// Put an item with optional condition
