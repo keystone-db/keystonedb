@@ -2498,7 +2498,9 @@ dependencies = [
 name = "kstone-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "kstone-api",
+ "serde_json",
 ]
 
 [[package]]

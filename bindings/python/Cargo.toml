@@ -1,0 +1,22 @@
+[package]
+name = "keystonedb-python"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Python bindings for KeystoneDB - a DynamoDB-compatible embedded database"
+authors = ["KeystoneDB Contributors"]
+
+# Exclude from parent workspace
+[workspace]
+
+[lib]
+name = "keystonedb"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+kstone-api = { path = "../../kstone-api" }
+serde_json = "1.0"
+
+[build-dependencies]
+pyo3-build-config = "0.22"
