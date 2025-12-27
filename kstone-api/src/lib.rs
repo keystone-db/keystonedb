@@ -1,3 +1,39 @@
+//! # kstone-api
+//!
+//! High-level DynamoDB-compatible API for KeystoneDB.
+//!
+//! This crate provides the primary interface for working with KeystoneDB,
+//! offering familiar DynamoDB-style operations:
+//!
+//! - **CRUD**: Put, Get, Delete operations
+//! - **Query**: Efficient queries by partition key with sort key conditions
+//! - **Scan**: Full table scans with parallel segment support
+//! - **Batch**: BatchGet and BatchWrite for bulk operations
+//! - **Transactions**: ACID transactions with TransactGet/TransactWrite
+//! - **Indexes**: Local and Global Secondary Indexes (LSI/GSI)
+//! - **PartiQL**: SQL-compatible query language
+//!
+//! ## Quick Start
+//!
+//! ```no_run
+//! use kstone_api::{Database, ItemBuilder};
+//!
+//! // Create a database
+//! let db = Database::create("mydb.keystone").unwrap();
+//!
+//! // Put an item
+//! let item = ItemBuilder::new()
+//!     .string("name", "Alice")
+//!     .number("age", 30)
+//!     .build();
+//! db.put(b"user#123", item).unwrap();
+//!
+//! // Get an item
+//! if let Some(item) = db.get(b"user#123").unwrap() {
+//!     println!("Found: {:?}", item);
+//! }
+//! ```
+
 use kstone_core::{Result, Key, Item, Value, lsm::LsmEngine, MemoryLsmEngine};
 use bytes::Bytes;
 use std::path::Path;
@@ -80,7 +116,15 @@ pub struct DatabaseHealth {
     pub errors: Vec<String>,
 }
 
-/// KeystoneDB Database handle
+/// KeystoneDB database handle.
+///
+/// The primary interface for interacting with a KeystoneDB database.
+/// Thread-safe and can be shared across threads via `Arc<Database>`.
+///
+/// # Storage Modes
+///
+/// - **Disk-based**: Persistent storage with WAL for crash recovery
+/// - **In-memory**: Temporary storage for testing via `create_in_memory()`
 pub struct Database {
     engine: DatabaseEngine,
 }

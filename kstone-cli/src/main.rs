@@ -632,6 +632,8 @@ fn keystone_value_to_json(value: &KeystoneValue) -> serde_json::Value {
             // Encode timestamp as number
             serde_json::Value::Number((*ts).into())
         }
+        // Handle future Value variants
+        _ => serde_json::Value::String(format!("{:?}", value)),
     }
 }
 
@@ -695,6 +697,8 @@ fn format_csv_value(value: &KeystoneValue) -> String {
         KeystoneValue::B(_) => escape_csv("[binary]"),
         KeystoneValue::VecF32(_) => escape_csv("[vector]"),
         KeystoneValue::Ts(ts) => ts.to_string(),
+        // Handle future Value variants
+        _ => escape_csv(&format!("{:?}", value)),
     }
 }
 
@@ -889,5 +893,7 @@ fn value_to_compact_string(value: &KeystoneValue) -> String {
         L(list) => format!("[{} items]", list.len()),
         M(map) => format!("{{{} fields}}", map.len()),
         VecF32(vec) => format!("<vector[{}]>", vec.len()),
+        // Handle future Value variants
+        _ => format!("{:?}", value),
     }
 }

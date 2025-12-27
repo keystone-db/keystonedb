@@ -89,6 +89,8 @@ fn format_value(value: &KeystoneValue) -> String {
             // Display timestamp
             ts.to_string()
         }
+        // Handle future Value variants
+        _ => format!("{:?}", value),
     }
 }
 

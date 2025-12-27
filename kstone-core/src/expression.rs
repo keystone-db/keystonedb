@@ -1277,4 +1277,35 @@ mod tests {
         let result = ExpressionParser::parse(&expr);
         assert!(result.is_ok(), "Should be able to parse expression under depth limit");
     }
+
+    #[test]
+    fn test_expression_empty_placeholder() {
+        // Empty placeholder is syntactically valid, but would fail at evaluation
+        let result = ExpressionParser::parse("age > :");
+        assert!(result.is_ok(), "Parser accepts empty placeholder syntactically");
+
+        // But evaluation should fail since ':' won't be in context
+        let expr = result.unwrap();
+        let mut item = HashMap::new();
+        item.insert("age".to_string(), Value::number(30));
+        let context = ExpressionContext::new();
+        let evaluator = ExpressionEvaluator::new(&item, &context);
+
+        // This should fail because ':' is not in the context
+        let eval_result = evaluator.evaluate(&expr);
+        assert!(eval_result.is_err(), "Evaluation should fail for empty placeholder");
+    }
+
+    #[test]
+    fn test_expression_unclosed_parenthesis() {
+        let result = ExpressionParser::parse("(age > :val");
+        assert!(result.is_err(), "Should fail on unclosed parenthesis");
+    }
+
+    #[test]
+    fn test_expression_invalid_operator() {
+        let result = ExpressionParser::parse("age <> :val");
+        // <> should be valid (not equal)
+        assert!(result.is_ok(), "<> is a valid not-equal operator");
+    }
 }

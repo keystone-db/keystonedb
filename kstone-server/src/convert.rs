@@ -70,6 +70,7 @@ pub fn ks_value_to_proto(value: &KsValue) -> proto::Value {
             values: vec.clone(),
         }),
         KsValue::Ts(ts) => ProtoValueEnum::TimestampValue(*ts as u64),
+        _ => ProtoValueEnum::StringValue(format!("Unsupported value type: {:?}", value)),
     };
 
     proto::Value {

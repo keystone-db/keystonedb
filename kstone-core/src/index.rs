@@ -7,6 +7,7 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 /// Index projection type - which attributes to include in index
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndexProjection {
     /// Project all attributes (default)

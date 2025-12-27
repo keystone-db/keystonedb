@@ -4,8 +4,9 @@
 /// asynchronously without blocking database operations.
 
 use crate::compaction::{CompactionConfig, CompactionStatsAtomic};
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -84,7 +85,7 @@ impl BackgroundWorker {
         while !shutdown.load(Ordering::Relaxed) {
             // Check for work
             let work = {
-                let mut queue = work_queue.lock().unwrap();
+                let mut queue = work_queue.lock();
                 if queue.is_empty() {
                     None
                 } else {
@@ -119,7 +120,7 @@ impl BackgroundWorker {
 
     /// Queue a compaction request for a stripe
     pub fn queue_compaction(&self, stripe_id: usize) {
-        let mut queue = self.work_queue.lock().unwrap();
+        let mut queue = self.work_queue.lock();
 
         // Don't queue duplicate requests
         if queue.iter().any(|r| r.stripe_id == stripe_id) {
@@ -133,7 +134,7 @@ impl BackgroundWorker {
 
     /// Get the current work queue size
     pub fn queue_size(&self) -> usize {
-        self.work_queue.lock().unwrap().len()
+        self.work_queue.lock().len()
     }
 
     /// Initiate graceful shutdown

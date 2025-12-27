@@ -10,8 +10,9 @@ use kstone_client::{
     RemoteExecuteStatementResponse
 };
 use kstone_core::Value;
-use kstone_server::{KeystoneDbServer, KeystoneService};
+use kstone_server::{KeystoneDbServer, KeystoneService, RateLimiter};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
@@ -24,7 +25,8 @@ async fn start_test_server() -> (TempDir, String, tokio::task::JoinHandle<()>) {
     // Create database
     let dir = TempDir::new().unwrap();
     let db = Database::create(dir.path()).unwrap();
-    let service = KeystoneService::new(db);
+    let rate_limiter = Arc::new(RateLimiter::new(1000, 0));
+    let service = KeystoneService::new(db, rate_limiter);
 
     // Find an available port by binding to port 0
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

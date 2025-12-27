@@ -7,6 +7,7 @@ use clap::Parser;
 use kstone_api::Database;
 use kstone_server::{ConnectionManager, KeystoneDbServer, KeystoneService, RateLimiter, metrics};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
 use tonic::transport::Server;
@@ -134,8 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Create rate limiter
-    let _rate_limiter = RateLimiter::new(args.max_rps_per_connection, args.max_rps_global);
-    if _rate_limiter.is_enabled() {
+    let rate_limiter = Arc::new(RateLimiter::new(args.max_rps_per_connection, args.max_rps_global));
+    if rate_limiter.is_enabled() {
         info!(
             "Rate limiting enabled: per_connection={} rps, global={} rps",
             if args.max_rps_per_connection == 0 { "unlimited".to_string() } else { args.max_rps_per_connection.to_string() },
@@ -155,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create gRPC service
-    let service = KeystoneService::new(db);
+    let service = KeystoneService::new(db, Arc::clone(&rate_limiter));
     let grpc_addr = format!("{}:{}", args.host, args.port).parse()?;
 
     info!("Starting KeystoneDB gRPC server on {}", grpc_addr);

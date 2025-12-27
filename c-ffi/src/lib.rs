@@ -67,6 +67,27 @@ fn error_from_keystone(err: &KeystoneError) -> i32 {
     }
 }
 
+/// Validates a database path to prevent path traversal attacks.
+/// Returns the validated path or sets an error and returns None.
+fn validate_db_path(path_str: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Path, Component};
+
+    let path = Path::new(path_str);
+
+    // Check for path traversal attempts
+    for component in path.components() {
+        if let Component::ParentDir = component {
+            set_error(
+                KSTONE_ERR_INVALID_ARGUMENT,
+                "Path traversal not allowed: '..' in path".to_string(),
+            );
+            return None;
+        }
+    }
+
+    Some(path.to_path_buf())
+}
+
 // ============================================================================
 // Opaque Handles
 // ============================================================================
@@ -204,7 +225,13 @@ pub unsafe extern "C" fn kstone_db_create(path: *const c_char) -> *mut KstoneDb 
         }
     };
 
-    match Database::create(path_str) {
+    // Validate path to prevent path traversal attacks
+    let validated_path = match validate_db_path(path_str) {
+        Some(p) => p,
+        None => return ptr::null_mut(), // Error already set by validate_db_path
+    };
+
+    match Database::create(&validated_path) {
         Ok(db) => Box::into_raw(Box::new(KstoneDb { inner: db })),
         Err(e) => {
             set_error(error_from_keystone(&e), e.to_string());
@@ -235,7 +262,13 @@ pub unsafe extern "C" fn kstone_db_open(path: *const c_char) -> *mut KstoneDb {
         }
     };
 
-    match Database::open(path_str) {
+    // Validate path to prevent path traversal attacks
+    let validated_path = match validate_db_path(path_str) {
+        Some(p) => p,
+        None => return ptr::null_mut(), // Error already set by validate_db_path
+    };
+
+    match Database::open(&validated_path) {
         Ok(db) => Box::into_raw(Box::new(KstoneDb { inner: db })),
         Err(e) => {
             set_error(error_from_keystone(&e), e.to_string());
@@ -773,6 +806,8 @@ pub unsafe extern "C" fn kstone_item_to_json(item: *const KstoneItem) -> *mut c_
             }
             kstone_api::KeystoneValue::VecF32(vec) => serde_json::json!(vec),
             kstone_api::KeystoneValue::Ts(ts) => serde_json::json!(ts),
+            // Handle any future variants (KeystoneValue is non-exhaustive)
+            _ => serde_json::Value::Null,
         }
     }
 
@@ -1739,6 +1774,40 @@ mod tests {
             kstone_item_free(retrieved);
             kstone_item_free(item);
             kstone_db_close(db);
+        }
+    }
+
+    #[test]
+    fn test_path_traversal_prevention() {
+        unsafe {
+            // Test path with ".." should be rejected
+            let path = CString::new("../../../etc/passwd").unwrap();
+            let db = kstone_db_create(path.as_ptr());
+            assert!(db.is_null());
+            assert_eq!(kstone_last_error_code(), KSTONE_ERR_INVALID_ARGUMENT);
+
+            let err_msg = kstone_last_error();
+            assert!(!err_msg.is_null());
+            let msg_str = CStr::from_ptr(err_msg).to_str().unwrap();
+            assert!(msg_str.contains("Path traversal not allowed"));
+            kstone_string_free(err_msg);
+
+            // Test open with path traversal
+            let path = CString::new("safe/../dangerous").unwrap();
+            let db = kstone_db_open(path.as_ptr());
+            assert!(db.is_null());
+            assert_eq!(kstone_last_error_code(), KSTONE_ERR_INVALID_ARGUMENT);
+
+            // Test valid path should work (even if the database doesn't exist)
+            let path = CString::new("valid/path/to/db").unwrap();
+            let db = kstone_db_create(path.as_ptr());
+            // This might fail for other reasons (like directory doesn't exist),
+            // but it should NOT fail with path traversal error
+            let last_code = kstone_last_error_code();
+            assert_ne!(last_code, KSTONE_ERR_NULL_POINTER);
+            if !db.is_null() {
+                kstone_db_close(db);
+            }
         }
     }
 }

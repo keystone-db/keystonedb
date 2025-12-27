@@ -1,3 +1,26 @@
+//! # kstone-core
+//!
+//! Core storage engine for KeystoneDB - a single-file, embedded, DynamoDB-style database.
+//!
+//! This crate provides the low-level storage engine implementation including:
+//! - LSM tree with 256 stripes for horizontal scalability
+//! - Write-ahead log (WAL) with crash recovery
+//! - Sorted String Tables (SST) with bloom filters
+//! - Background compaction for space reclamation
+//! - PartiQL parser for SQL-compatible queries
+//!
+//! ## Usage
+//!
+//! Most users should use the `kstone-api` crate which provides a high-level
+//! DynamoDB-compatible API. This crate is for advanced users who need direct
+//! access to the storage engine.
+//!
+//! ## Architecture
+//!
+//! The storage engine uses a 256-stripe LSM tree where keys are routed to stripes
+//! based on `crc32(partition_key) % 256`. Each stripe has its own memtable and
+//! SST file list, enabling parallel operations.
+
 pub mod error;
 pub mod types;
 pub mod layout;

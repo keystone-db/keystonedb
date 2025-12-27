@@ -7,6 +7,7 @@ use crate::{Key, Item};
 use serde::{Deserialize, Serialize};
 
 /// Stream view type - controls what data is included in stream records
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamViewType {
     /// Only the key attributes of the item
@@ -26,6 +27,7 @@ impl Default for StreamViewType {
 }
 
 /// Stream event type
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamEventType {
     /// A new item was added to the table
@@ -164,7 +166,7 @@ impl StreamConfig {
 fn current_timestamp_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 

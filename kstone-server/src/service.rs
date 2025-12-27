@@ -14,16 +14,21 @@ use uuid::Uuid;
 
 use crate::convert::*;
 use crate::metrics::{RPC_REQUESTS_TOTAL, RPC_DURATION_SECONDS};
+use crate::rate_limit::RateLimiter;
 
 /// KeystoneDB gRPC service implementation
 pub struct KeystoneService {
     db: Arc<Database>,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl KeystoneService {
     /// Create a new KeystoneService wrapping a Database
-    pub fn new(db: Database) -> Self {
-        Self { db: Arc::new(db) }
+    pub fn new(db: Database, rate_limiter: Arc<RateLimiter>) -> Self {
+        Self {
+            db: Arc::new(db),
+            rate_limiter,
+        }
     }
 }
 
@@ -52,6 +57,7 @@ fn map_error(err: KsError) -> Status {
         KsError::CompactionError(msg) => Status::internal(format!("Compaction error: {}", msg)),
         KsError::StripeError(msg) => Status::internal(format!("Stripe error: {}", msg)),
         KsError::ResourceExhausted(msg) => Status::resource_exhausted(format!("Resource exhausted: {}", msg)),
+        _ => Status::internal(format!("Unknown error: {}", err)),
     }
 }
 
@@ -141,6 +147,9 @@ impl KeystoneDb for KeystoneService {
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
 
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
+
         // Start timing
         let timer = RPC_DURATION_SECONDS.with_label_values(&["put"]).start_timer();
 
@@ -222,6 +231,9 @@ impl KeystoneDb for KeystoneService {
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
 
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
+
         info!("Received get request");
         let req = request.into_inner();
 
@@ -270,6 +282,9 @@ impl KeystoneDb for KeystoneService {
         // Generate trace ID for request correlation
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
+
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
 
         let req = request.into_inner();
 
@@ -336,6 +351,9 @@ impl KeystoneDb for KeystoneService {
         // Generate trace ID for request correlation
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
+
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
 
         let req = request.into_inner();
 
@@ -406,6 +424,9 @@ impl KeystoneDb for KeystoneService {
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
 
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
+
         let req = request.into_inner();
 
         // Build scan starting with defaults
@@ -472,6 +493,9 @@ impl KeystoneDb for KeystoneService {
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
 
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
+
         let req = request.into_inner();
 
         // Convert protobuf keys to core Keys
@@ -515,6 +539,9 @@ impl KeystoneDb for KeystoneService {
         // Generate trace ID for request correlation
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
+
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
 
         use proto::write_request::Request as WriteRequestEnum;
 
@@ -584,6 +611,9 @@ impl KeystoneDb for KeystoneService {
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
 
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
+
         let req = request.into_inner();
 
         // Build transact get request with all keys
@@ -628,6 +658,9 @@ impl KeystoneDb for KeystoneService {
         // Generate trace ID for request correlation
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
+
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
 
         use proto::transact_write_item::Item as ProtoTxItem;
 
@@ -741,6 +774,9 @@ impl KeystoneDb for KeystoneService {
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
 
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
+
         let req = request.into_inner();
 
         // Build update operation
@@ -786,6 +822,9 @@ impl KeystoneDb for KeystoneService {
         // Generate trace ID for request correlation
         let trace_id = Uuid::new_v4().to_string();
         tracing::Span::current().record("trace_id", &trace_id);
+
+        // Check rate limit
+        self.rate_limiter.check_rate_limit()?;
 
         use proto::execute_statement_response::Response as ProtoStmtResponse;
 
