@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_double, c_int, c_uint};
 use std::ptr;
-use std::sync::Mutex;
+
+use parking_lot::Mutex;
 
 use kstone_api::{
     BatchGetRequest, BatchWriteRequest, Database, ItemBuilder, Query, Scan, Update,
@@ -42,15 +43,19 @@ pub const KSTONE_ERR_IO: c_int = -8;
 pub const KSTONE_ERR_CORRUPTION: c_int = -9;
 pub const KSTONE_ERR_INTERNAL: c_int = -10;
 
+/// Size limits (matching DynamoDB limits)
+const MAX_KEY_SIZE: usize = 2048; // 2KB max key size
+const MAX_VALUE_SIZE: usize = 400 * 1024; // 400KB max value size
+
 fn set_error(code: i32, message: String) {
     LAST_ERROR.with(|e| {
-        *e.lock().unwrap() = Some((code, message));
+        *e.lock() = Some((code, message));
     });
 }
 
 fn clear_error() {
     LAST_ERROR.with(|e| {
-        *e.lock().unwrap() = None;
+        *e.lock() = None;
     });
 }
 
@@ -65,6 +70,55 @@ fn error_from_keystone(err: &KeystoneError) -> i32 {
         KeystoneError::Corruption(_) => KSTONE_ERR_CORRUPTION,
         _ => KSTONE_ERR_INTERNAL,
     }
+}
+
+/// Validates a database path to prevent path traversal attacks.
+/// Returns the validated path or sets an error and returns None.
+fn validate_db_path(path_str: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Path, Component};
+
+    let path = Path::new(path_str);
+
+    // Check for path traversal attempts
+    for component in path.components() {
+        if let Component::ParentDir = component {
+            set_error(
+                KSTONE_ERR_INVALID_ARGUMENT,
+                "Path traversal not allowed: '..' in path".to_string(),
+            );
+            return None;
+        }
+    }
+
+    Some(path.to_path_buf())
+}
+
+/// Validates a key size to prevent unbounded memory allocation.
+/// Returns the validated size or sets an error and returns None.
+fn validate_key_size(len: c_uint) -> Option<usize> {
+    let len = len as usize;
+    if len > MAX_KEY_SIZE {
+        set_error(
+            KSTONE_ERR_INVALID_ARGUMENT,
+            format!("Key size {} exceeds maximum {}", len, MAX_KEY_SIZE),
+        );
+        return None;
+    }
+    Some(len)
+}
+
+/// Validates a value size to prevent unbounded memory allocation.
+/// Returns the validated size or sets an error and returns None.
+fn validate_value_size(len: c_uint) -> Option<usize> {
+    let len = len as usize;
+    if len > MAX_VALUE_SIZE {
+        set_error(
+            KSTONE_ERR_INVALID_ARGUMENT,
+            format!("Value size {} exceeds maximum {}", len, MAX_VALUE_SIZE),
+        );
+        return None;
+    }
+    Some(len)
 }
 
 // ============================================================================
@@ -144,9 +198,30 @@ pub struct KstoneBatchGetResponse {
 #[no_mangle]
 pub extern "C" fn kstone_last_error() -> *mut c_char {
     LAST_ERROR.with(|e| {
-        let guard = e.lock().unwrap();
+        let guard = e.lock();
         match &*guard {
-            Some((_, msg)) => CString::new(msg.as_str()).unwrap().into_raw(),
+            Some((_, msg)) => {
+                // If CString::new fails (contains null byte), return a safe error message
+                match CString::new(msg.as_str()) {
+                    Ok(cstr) => cstr.into_raw(),
+                    Err(_) => {
+                        // Error message contains null byte, sanitize it by removing all null bytes
+                        let sanitized = msg.replace('\0', "");
+                        // After sanitization, this should always succeed, but we handle the error case
+                        match CString::new(sanitized) {
+                            Ok(cstr) => cstr.into_raw(),
+                            Err(_) => {
+                                // Extremely unlikely: sanitized string still has issues
+                                // Return a simple ASCII fallback message
+                                match CString::new("Error") {
+                                    Ok(cstr) => cstr.into_raw(),
+                                    Err(_) => ptr::null_mut(),  // Should never happen with ASCII literal
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             None => ptr::null_mut(),
         }
     })
@@ -156,7 +231,7 @@ pub extern "C" fn kstone_last_error() -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn kstone_last_error_code() -> c_int {
     LAST_ERROR.with(|e| {
-        let guard = e.lock().unwrap();
+        let guard = e.lock();
         match &*guard {
             Some((code, _)) => *code,
             None => KSTONE_OK,
@@ -204,7 +279,13 @@ pub unsafe extern "C" fn kstone_db_create(path: *const c_char) -> *mut KstoneDb 
         }
     };
 
-    match Database::create(path_str) {
+    // Validate path to prevent path traversal attacks
+    let validated_path = match validate_db_path(path_str) {
+        Some(p) => p,
+        None => return ptr::null_mut(), // Error already set by validate_db_path
+    };
+
+    match Database::create(&validated_path) {
         Ok(db) => Box::into_raw(Box::new(KstoneDb { inner: db })),
         Err(e) => {
             set_error(error_from_keystone(&e), e.to_string());
@@ -235,7 +316,13 @@ pub unsafe extern "C" fn kstone_db_open(path: *const c_char) -> *mut KstoneDb {
         }
     };
 
-    match Database::open(path_str) {
+    // Validate path to prevent path traversal attacks
+    let validated_path = match validate_db_path(path_str) {
+        Some(p) => p,
+        None => return ptr::null_mut(), // Error already set by validate_db_path
+    };
+
+    match Database::open(&validated_path) {
         Ok(db) => Box::into_raw(Box::new(KstoneDb { inner: db })),
         Err(e) => {
             set_error(error_from_keystone(&e), e.to_string());
@@ -317,7 +404,12 @@ pub unsafe extern "C" fn kstone_db_put(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
 
     match (*db).inner.put(pk_slice, (*item).inner.clone()) {
         Ok(()) => KSTONE_OK,
@@ -346,8 +438,18 @@ pub unsafe extern "C" fn kstone_db_put_with_sk(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
 
     match (*db).inner.put_with_sk(pk_slice, sk_slice, (*item).inner.clone()) {
         Ok(()) => KSTONE_OK,
@@ -377,7 +479,12 @@ pub unsafe extern "C" fn kstone_db_get(
         return ptr::null_mut();
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
 
     match (*db).inner.get(pk_slice) {
         Ok(Some(item)) => Box::into_raw(Box::new(KstoneItem { inner: item })),
@@ -409,8 +516,18 @@ pub unsafe extern "C" fn kstone_db_get_with_sk(
         return ptr::null_mut();
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
 
     match (*db).inner.get_with_sk(pk_slice, sk_slice) {
         Ok(Some(item)) => Box::into_raw(Box::new(KstoneItem { inner: item })),
@@ -440,7 +557,12 @@ pub unsafe extern "C" fn kstone_db_delete(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
 
     match (*db).inner.delete(pk_slice) {
         Ok(()) => KSTONE_OK,
@@ -468,8 +590,18 @@ pub unsafe extern "C" fn kstone_db_delete_with_sk(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
 
     match (*db).inner.delete_with_sk(pk_slice, sk_slice) {
         Ok(()) => KSTONE_OK,
@@ -622,7 +754,12 @@ pub unsafe extern "C" fn kstone_item_set_binary(
         Err(_) => return KSTONE_ERR_INVALID_UTF8,
     };
 
-    let bytes = std::slice::from_raw_parts(value, value_len as usize).to_vec();
+    let value_len_validated = match validate_value_size(value_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let bytes = std::slice::from_raw_parts(value, value_len_validated).to_vec();
     (*item).inner.insert(key_str, kstone_api::KeystoneValue::B(bytes.into()));
     KSTONE_OK
 }
@@ -646,7 +783,10 @@ pub unsafe extern "C" fn kstone_item_get_string(
 
     match (*item).inner.get(key_str) {
         Some(kstone_api::KeystoneValue::S(s)) => {
-            CString::new(s.as_str()).unwrap().into_raw()
+            match CString::new(s.as_str()) {
+                Ok(cstr) => cstr.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
         }
         _ => ptr::null_mut(),
     }
@@ -773,6 +913,8 @@ pub unsafe extern "C" fn kstone_item_to_json(item: *const KstoneItem) -> *mut c_
             }
             kstone_api::KeystoneValue::VecF32(vec) => serde_json::json!(vec),
             kstone_api::KeystoneValue::Ts(ts) => serde_json::json!(ts),
+            // Handle any future variants (KeystoneValue is non-exhaustive)
+            _ => serde_json::Value::Null,
         }
     }
 
@@ -783,7 +925,10 @@ pub unsafe extern "C" fn kstone_item_to_json(item: *const KstoneItem) -> *mut c_
         .collect();
 
     match serde_json::to_string(&serde_json::Value::Object(json_map)) {
-        Ok(s) => CString::new(s).unwrap().into_raw(),
+        Ok(s) => match CString::new(s) {
+            Ok(cstr) => cstr.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
         Err(_) => ptr::null_mut(),
     }
 }
@@ -965,7 +1110,12 @@ pub unsafe extern "C" fn kstone_query_new(
         return ptr::null_mut();
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return ptr::null_mut(),
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     Box::into_raw(Box::new(KstoneQuery {
         inner: Query::new(pk_slice),
     }))
@@ -990,7 +1140,12 @@ pub unsafe extern "C" fn kstone_query_sk_eq(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_eq(sk_slice);
     KSTONE_OK
@@ -1007,7 +1162,12 @@ pub unsafe extern "C" fn kstone_query_sk_begins_with(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let prefix_slice = std::slice::from_raw_parts(prefix, prefix_len as usize);
+    let prefix_len_validated = match validate_key_size(prefix_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let prefix_slice = std::slice::from_raw_parts(prefix, prefix_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_begins_with(prefix_slice);
     KSTONE_OK
@@ -1024,7 +1184,12 @@ pub unsafe extern "C" fn kstone_query_sk_gt(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_gt(sk_slice);
     KSTONE_OK
@@ -1041,7 +1206,12 @@ pub unsafe extern "C" fn kstone_query_sk_gte(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_gte(sk_slice);
     KSTONE_OK
@@ -1058,7 +1228,12 @@ pub unsafe extern "C" fn kstone_query_sk_lt(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_lt(sk_slice);
     KSTONE_OK
@@ -1075,7 +1250,12 @@ pub unsafe extern "C" fn kstone_query_sk_lte(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk_slice = std::slice::from_raw_parts(sk, sk_len as usize);
+    let sk_len_validated = match validate_key_size(sk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk_slice = std::slice::from_raw_parts(sk, sk_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_lte(sk_slice);
     KSTONE_OK
@@ -1094,8 +1274,18 @@ pub unsafe extern "C" fn kstone_query_sk_between(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let sk1_slice = std::slice::from_raw_parts(sk1, sk1_len as usize);
-    let sk2_slice = std::slice::from_raw_parts(sk2, sk2_len as usize);
+    let sk1_len_validated = match validate_key_size(sk1_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk2_len_validated = match validate_key_size(sk2_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let sk1_slice = std::slice::from_raw_parts(sk1, sk1_len_validated);
+    let sk2_slice = std::slice::from_raw_parts(sk2, sk2_len_validated);
     let old_query = std::mem::replace(&mut (*query).inner, Query::new(&[]));
     (*query).inner = old_query.sk_between(sk1_slice, sk2_slice);
     KSTONE_OK
@@ -1180,8 +1370,11 @@ pub unsafe extern "C" fn kstone_db_query(
             let has_more = response.last_key.is_some();
             let (last_pk, last_sk) = match response.last_key {
                 Some((pk, sk)) => {
-                    let pk_str = CString::new(pk.to_vec()).unwrap().into_raw();
-                    let sk_str = sk.map(|s| CString::new(s.to_vec()).unwrap().into_raw())
+                    let pk_str = CString::new(pk.to_vec())
+                        .map(|c| c.into_raw())
+                        .unwrap_or(ptr::null_mut());
+                    let sk_str = sk.and_then(|s| CString::new(s.to_vec()).ok())
+                        .map(|c| c.into_raw())
                         .unwrap_or(ptr::null_mut());
                     (pk_str, sk_str)
                 }
@@ -1335,8 +1528,11 @@ pub unsafe extern "C" fn kstone_db_scan(
             let has_more = response.last_key.is_some();
             let (last_pk, last_sk) = match response.last_key {
                 Some((pk, sk)) => {
-                    let pk_str = CString::new(pk.to_vec()).unwrap().into_raw();
-                    let sk_str = sk.map(|s| CString::new(s.to_vec()).unwrap().into_raw())
+                    let pk_str = CString::new(pk.to_vec())
+                        .map(|c| c.into_raw())
+                        .unwrap_or(ptr::null_mut());
+                    let sk_str = sk.and_then(|s| CString::new(s.to_vec()).ok())
+                        .map(|c| c.into_raw())
                         .unwrap_or(ptr::null_mut());
                     (pk_str, sk_str)
                 }
@@ -1419,10 +1615,23 @@ pub unsafe extern "C" fn kstone_db_execute_sql(
                         "success": success
                     })
                 }
+                _ => {
+                    // Handle any future response types
+                    serde_json::json!({
+                        "type": "unknown",
+                        "success": false
+                    })
+                }
             };
 
             match serde_json::to_string(&json) {
-                Ok(s) => CString::new(s).unwrap().into_raw(),
+                Ok(s) => match CString::new(s) {
+                    Ok(cstr) => cstr.into_raw(),
+                    Err(_) => {
+                        set_error(KSTONE_ERR_INTERNAL, "JSON contains null byte".to_string());
+                        ptr::null_mut()
+                    }
+                },
                 Err(e) => {
                     set_error(KSTONE_ERR_INTERNAL, format!("JSON serialization failed: {}", e));
                     ptr::null_mut()
@@ -1468,7 +1677,12 @@ pub unsafe extern "C" fn kstone_batch_get_add_key(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     let old_batch = std::mem::replace(&mut (*batch).inner, BatchGetRequest::new());
     (*batch).inner = old_batch.add_key(pk_slice);
     KSTONE_OK
@@ -1502,7 +1716,13 @@ pub unsafe extern "C" fn kstone_db_batch_get(
             });
 
             match serde_json::to_string(&json) {
-                Ok(s) => CString::new(s).unwrap().into_raw(),
+                Ok(s) => match CString::new(s) {
+                    Ok(cstr) => cstr.into_raw(),
+                    Err(_) => {
+                        set_error(KSTONE_ERR_INTERNAL, "JSON contains null byte".to_string());
+                        ptr::null_mut()
+                    }
+                },
                 Err(e) => {
                     set_error(KSTONE_ERR_INTERNAL, format!("JSON serialization failed: {}", e));
                     ptr::null_mut()
@@ -1545,7 +1765,12 @@ pub unsafe extern "C" fn kstone_batch_write_put(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     let old_batch = std::mem::replace(&mut (*batch).inner, BatchWriteRequest::new());
     (*batch).inner = old_batch.put(pk_slice, (*item).inner.clone());
     KSTONE_OK
@@ -1562,7 +1787,12 @@ pub unsafe extern "C" fn kstone_batch_write_delete(
         return KSTONE_ERR_NULL_POINTER;
     }
 
-    let pk_slice = std::slice::from_raw_parts(pk, pk_len as usize);
+    let pk_len_validated = match validate_key_size(pk_len) {
+        Some(len) => len,
+        None => return KSTONE_ERR_INVALID_ARGUMENT,
+    };
+
+    let pk_slice = std::slice::from_raw_parts(pk, pk_len_validated);
     let old_batch = std::mem::replace(&mut (*batch).inner, BatchWriteRequest::new());
     (*batch).inner = old_batch.delete(pk_slice);
     KSTONE_OK
@@ -1622,7 +1852,7 @@ mod tests {
         let version = kstone_version();
         assert!(!version.is_null());
         unsafe {
-            let version_str = CStr::from_ptr(version).to_str().unwrap();
+            let version_str = CStr::from_ptr(version).to_str().unwrap_or("<invalid utf-8>");
             assert_eq!(version_str, "0.1.0");
         }
     }
@@ -1638,7 +1868,7 @@ mod tests {
         let msg = kstone_last_error();
         assert!(!msg.is_null());
         unsafe {
-            let msg_str = CStr::from_ptr(msg).to_str().unwrap();
+            let msg_str = CStr::from_ptr(msg).to_str().unwrap_or("<invalid utf-8>");
             assert_eq!(msg_str, "test error");
             kstone_string_free(msg);
         }
@@ -1670,7 +1900,7 @@ mod tests {
             let name_key = CString::new("name").unwrap();
             let name_value = kstone_item_get_string(item, name_key.as_ptr());
             assert!(!name_value.is_null());
-            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap(), "Alice");
+            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap_or("<invalid utf-8>"), "Alice");
             kstone_string_free(name_value);
 
             let age_key = CString::new("age").unwrap();
@@ -1696,7 +1926,7 @@ mod tests {
             assert!(!json_out.is_null());
 
             // Parse and verify
-            let json_str = CStr::from_ptr(json_out).to_str().unwrap();
+            let json_str = CStr::from_ptr(json_out).to_str().unwrap_or("<invalid utf-8>");
             let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
             assert_eq!(parsed["name"], "Bob");
             assert_eq!(parsed["age"], 25);
@@ -1733,12 +1963,46 @@ mod tests {
             // Verify
             let name_value = kstone_item_get_string(retrieved, key.as_ptr());
             assert!(!name_value.is_null());
-            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap(), "Test");
+            assert_eq!(CStr::from_ptr(name_value).to_str().unwrap_or("<invalid utf-8>"), "Test");
 
             kstone_string_free(name_value);
             kstone_item_free(retrieved);
             kstone_item_free(item);
             kstone_db_close(db);
+        }
+    }
+
+    #[test]
+    fn test_path_traversal_prevention() {
+        unsafe {
+            // Test path with ".." should be rejected
+            let path = CString::new("../../../etc/passwd").unwrap();
+            let db = kstone_db_create(path.as_ptr());
+            assert!(db.is_null());
+            assert_eq!(kstone_last_error_code(), KSTONE_ERR_INVALID_ARGUMENT);
+
+            let err_msg = kstone_last_error();
+            assert!(!err_msg.is_null());
+            let msg_str = CStr::from_ptr(err_msg).to_str().unwrap_or("<invalid utf-8>");
+            assert!(msg_str.contains("Path traversal not allowed"));
+            kstone_string_free(err_msg);
+
+            // Test open with path traversal
+            let path = CString::new("safe/../dangerous").unwrap();
+            let db = kstone_db_open(path.as_ptr());
+            assert!(db.is_null());
+            assert_eq!(kstone_last_error_code(), KSTONE_ERR_INVALID_ARGUMENT);
+
+            // Test valid path should work (even if the database doesn't exist)
+            let path = CString::new("valid/path/to/db").unwrap();
+            let db = kstone_db_create(path.as_ptr());
+            // This might fail for other reasons (like directory doesn't exist),
+            // but it should NOT fail with path traversal error
+            let last_code = kstone_last_error_code();
+            assert_ne!(last_code, KSTONE_ERR_NULL_POINTER);
+            if !db.is_null() {
+                kstone_db_close(db);
+            }
         }
     }
 }

@@ -452,9 +452,17 @@ mod tests {
 
     #[test]
     fn test_vector_clock_resolution() {
-        let local_clock = VectorClock::with_local(EndpointId::from_str("local"), 5);
+        // Local clock: local=5, remote=4 (local has seen remote up to version 4)
+        let mut local_clock = VectorClock::with_local(EndpointId::from_str("local"), 5);
+        local_clock.update(EndpointId::from_str("remote"), 4);
+
+        // Remote clock: remote=3, local=3 (remote is behind local on both endpoints)
         let mut remote_clock = VectorClock::with_local(EndpointId::from_str("remote"), 3);
-        remote_clock.update(EndpointId::from_str("local"), 3); // Remote is behind local
+        remote_clock.update(EndpointId::from_str("local"), 3);
+
+        // With these clocks, local definitively "happens after" remote
+        // because all of remote's values are <= local's values
+        // and at least one is strictly less (remote has remote=3 but local has remote=4)
 
         let mut conflict = Conflict::new(
             Key::new(b"key1".to_vec()),

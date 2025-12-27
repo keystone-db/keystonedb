@@ -1,9 +1,8 @@
 /// Remote update operations
 use crate::convert::*;
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use kstone_core::Item;
 use kstone_proto::{self as proto, keystone_db_client::KeystoneDbClient};
-use tonic::transport::Channel;
 use std::collections::HashMap;
 
 /// Remote update request builder
@@ -57,7 +56,13 @@ impl RemoteUpdate {
     }
 
     /// Execute the update operation
-    pub async fn execute(self, client: &mut KeystoneDbClient<Channel>) -> Result<RemoteUpdateResponse> {
+    pub async fn execute<T>(self, client: &mut KeystoneDbClient<T>) -> Result<RemoteUpdateResponse>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody> + Send + 'static,
+        T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        T::ResponseBody: tonic::codegen::Body<Data = bytes::Bytes> + Send + 'static,
+        <T::ResponseBody as tonic::codegen::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    {
         // Convert expression values to protobuf
         let proto_values: HashMap<String, proto::Value> = self
             .expression_values
@@ -78,9 +83,11 @@ impl RemoteUpdate {
             .await?
             .into_inner();
 
-        let item = proto_item_to_ks(
-            response.item.expect("Server should return updated item")
-        )?;
+        let proto_item = response.item
+            .ok_or_else(|| ClientError::InternalError("Server did not return updated item".into()))?;
+
+        let item = proto_item_to_ks(proto_item)
+            .map_err(ClientError::from)?;
 
         Ok(RemoteUpdateResponse { item })
     }

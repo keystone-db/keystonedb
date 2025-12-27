@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Type constraint for an attribute
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AttributeType {
     String,
@@ -37,6 +38,7 @@ impl AttributeType {
 }
 
 /// Value constraint for an attribute
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ValueConstraint {
     /// Minimum value (for numbers)
@@ -117,9 +119,23 @@ impl ValueConstraint {
             }
             ValueConstraint::Pattern(pattern) => {
                 if let Value::S(s) = value {
-                    let re = regex::Regex::new(pattern).map_err(|e| {
-                        Error::InvalidArgument(format!("Invalid regex pattern: {}", e))
-                    })?;
+                    // Prevent ReDoS: limit input length before matching
+                    const MAX_INPUT_LENGTH: usize = 10_000;
+                    if s.len() > MAX_INPUT_LENGTH {
+                        return Err(Error::InvalidArgument(
+                            format!("Value too long for regex matching (max {} chars)", MAX_INPUT_LENGTH)
+                        ));
+                    }
+
+                    // Prevent ReDoS: use RegexBuilder with size limits
+                    let re = regex::RegexBuilder::new(pattern)
+                        .size_limit(1_000_000)      // 1MB compiled regex size limit
+                        .dfa_size_limit(10_000_000) // 10MB DFA cache limit
+                        .build()
+                        .map_err(|e| {
+                            Error::InvalidArgument(format!("Invalid regex pattern: {}", e))
+                        })?;
+
                     if !re.is_match(s) {
                         return Err(Error::InvalidArgument(
                             format!("Value '{}' does not match pattern '{}'", s, pattern)
@@ -331,5 +347,49 @@ mod tests {
         let mut invalid_item = HashMap::new();
         invalid_item.insert("age".to_string(), Value::N("30".to_string()));
         assert!(validator.validate(&invalid_item).is_err());
+    }
+
+    #[test]
+    fn test_pattern_normal_regex() {
+        // Test that normal regex patterns still work
+        let schema = AttributeSchema::new("email", AttributeType::String)
+            .with_constraint(ValueConstraint::Pattern(r"^[\w\.-]+@[\w\.-]+\.\w+$".to_string()));
+
+        // Valid email
+        assert!(schema.validate(Some(&Value::S("test@example.com".to_string()))).is_ok());
+
+        // Invalid email
+        assert!(schema.validate(Some(&Value::S("not-an-email".to_string()))).is_err());
+    }
+
+    #[test]
+    fn test_pattern_input_length_limit() {
+        // Test that input length limit is enforced
+        let schema = AttributeSchema::new("field", AttributeType::String)
+            .with_constraint(ValueConstraint::Pattern(r"^test.*".to_string()));
+
+        // String exceeding 10,000 chars should be rejected
+        let long_string = "a".repeat(10_001);
+        let result = schema.validate(Some(&Value::S(long_string)));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too long"));
+    }
+
+    #[test]
+    fn test_pattern_redos_protection() {
+        // Test that potentially dangerous patterns are handled safely
+        // This pattern could cause catastrophic backtracking: (a+)+b
+        // With input "aaaaaaaaaaaaaaaaaaa" (no 'b' at end)
+        let schema = AttributeSchema::new("field", AttributeType::String)
+            .with_constraint(ValueConstraint::Pattern(r"^(a+)+b$".to_string()));
+
+        // This should complete quickly without hanging due to size limits
+        let result = schema.validate(Some(&Value::S("a".repeat(100))));
+        // Should fail to match (no 'b' at end) but not hang
+        assert!(result.is_err());
+
+        // Valid input should still work
+        let result = schema.validate(Some(&Value::S("aaab".to_string())));
+        assert!(result.is_ok());
     }
 }

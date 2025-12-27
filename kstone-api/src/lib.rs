@@ -1,3 +1,39 @@
+//! # kstone-api
+//!
+//! High-level DynamoDB-compatible API for KeystoneDB.
+//!
+//! This crate provides the primary interface for working with KeystoneDB,
+//! offering familiar DynamoDB-style operations:
+//!
+//! - **CRUD**: Put, Get, Delete operations
+//! - **Query**: Efficient queries by partition key with sort key conditions
+//! - **Scan**: Full table scans with parallel segment support
+//! - **Batch**: BatchGet and BatchWrite for bulk operations
+//! - **Transactions**: ACID transactions with TransactGet/TransactWrite
+//! - **Indexes**: Local and Global Secondary Indexes (LSI/GSI)
+//! - **PartiQL**: SQL-compatible query language
+//!
+//! ## Quick Start
+//!
+//! ```no_run
+//! use kstone_api::{Database, ItemBuilder};
+//!
+//! // Create a database
+//! let db = Database::create("mydb.keystone").unwrap();
+//!
+//! // Put an item
+//! let item = ItemBuilder::new()
+//!     .string("name", "Alice")
+//!     .number("age", 30)
+//!     .build();
+//! db.put(b"user#123", item).unwrap();
+//!
+//! // Get an item
+//! if let Some(item) = db.get(b"user#123").unwrap() {
+//!     println!("Found: {:?}", item);
+//! }
+//! ```
+
 use kstone_core::{Result, Key, Item, Value, lsm::LsmEngine, MemoryLsmEngine};
 use bytes::Bytes;
 use std::path::Path;
@@ -59,6 +95,7 @@ pub struct DatabaseStats {
 }
 
 /// Database health status
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthStatus {
     /// Database is fully operational
@@ -80,7 +117,15 @@ pub struct DatabaseHealth {
     pub errors: Vec<String>,
 }
 
-/// KeystoneDB Database handle
+/// KeystoneDB database handle.
+///
+/// The primary interface for interacting with a KeystoneDB database.
+/// Thread-safe and can be shared across threads via `Arc<Database>`.
+///
+/// # Storage Modes
+///
+/// - **Disk-based**: Persistent storage with WAL for crash recovery
+/// - **In-memory**: Temporary storage for testing via `create_in_memory()`
 pub struct Database {
     engine: DatabaseEngine,
 }
@@ -351,6 +396,9 @@ impl Database {
 
     /// Batch get multiple items (Phase 2.6+)
     pub fn batch_get(&self, request: BatchGetRequest) -> Result<BatchGetResponse> {
+        // Validate batch size
+        request.validate()?;
+
         let results = match &self.engine {
             DatabaseEngine::Disk(e) => e.batch_get(request.keys())?,
             DatabaseEngine::Memory(e) => e.batch_get(request.keys())?,
@@ -368,6 +416,9 @@ impl Database {
 
     /// Batch write multiple items (Phase 2.6+)
     pub fn batch_write(&self, request: BatchWriteRequest) -> Result<BatchWriteResponse> {
+        // Validate batch size
+        request.validate()?;
+
         // Convert batch write request to operations
         let mut operations = Vec::new();
 
@@ -391,6 +442,9 @@ impl Database {
 
     /// Transactional get - read multiple items atomically (Phase 2.7+)
     pub fn transact_get(&self, request: TransactGetRequest) -> Result<TransactGetResponse> {
+        // Validate transaction size
+        request.validate()?;
+
         let items = match &self.engine {
             DatabaseEngine::Disk(e) => e.transact_get(request.keys())?,
             DatabaseEngine::Memory(e) => e.transact_get(request.keys())?,
@@ -400,6 +454,9 @@ impl Database {
 
     /// Transactional write - write multiple items atomically with conditions (Phase 2.7+)
     pub fn transact_write(&self, request: TransactWriteRequest) -> Result<TransactWriteResponse> {
+        // Validate transaction size
+        request.validate()?;
+
         use kstone_core::{TransactWriteOperation, expression::ExpressionParser};
 
         // Convert API operations to core operations
@@ -485,7 +542,7 @@ impl Database {
             DatabaseEngine::Disk(e) => {
                 Ok(DatabaseStats {
                     total_keys: None, // Would require expensive scan
-                    total_sst_files: 0, // TODO: implement
+                    total_sst_files: e.sst_count() as u64,
                     wal_size_bytes: None,
                     memtable_size_bytes: None,
                     total_disk_size_bytes: None,
@@ -524,27 +581,68 @@ pub struct ItemBuilder {
 }
 
 impl ItemBuilder {
+    /// Create a new ItemBuilder
     pub fn new() -> Self {
         Self {
             item: HashMap::new(),
         }
     }
 
+    /// Set a string attribute
     pub fn string(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.item.insert(key.into(), Value::string(value.into()));
         self
     }
 
+    /// Set a number attribute
     pub fn number(mut self, key: impl Into<String>, value: impl ToString) -> Self {
         self.item.insert(key.into(), Value::number(value));
         self
     }
 
+    /// Set a boolean attribute
     pub fn bool(mut self, key: impl Into<String>, value: bool) -> Self {
         self.item.insert(key.into(), Value::Bool(value));
         self
     }
 
+    /// Set a null attribute
+    pub fn null(mut self, key: impl Into<String>) -> Self {
+        self.item.insert(key.into(), Value::Null);
+        self
+    }
+
+    /// Set a binary attribute
+    pub fn binary(mut self, key: impl Into<String>, bytes: impl Into<Bytes>) -> Self {
+        self.item.insert(key.into(), Value::binary(bytes));
+        self
+    }
+
+    /// Set a list attribute
+    pub fn list(mut self, key: impl Into<String>, values: Vec<Value>) -> Self {
+        self.item.insert(key.into(), Value::L(values));
+        self
+    }
+
+    /// Set a map attribute
+    pub fn map(mut self, key: impl Into<String>, map: HashMap<String, Value>) -> Self {
+        self.item.insert(key.into(), Value::map(map));
+        self
+    }
+
+    /// Set a timestamp attribute (milliseconds since epoch)
+    pub fn timestamp(mut self, key: impl Into<String>, millis: i64) -> Self {
+        self.item.insert(key.into(), Value::timestamp(millis));
+        self
+    }
+
+    /// Set a vector of f32 values (for embeddings/vector search)
+    pub fn vector_f32(mut self, key: impl Into<String>, values: Vec<f32>) -> Self {
+        self.item.insert(key.into(), Value::vector(values));
+        self
+    }
+
+    /// Build the final Item
     pub fn build(self) -> Item {
         self.item
     }
@@ -1947,6 +2045,68 @@ mod tests {
         // Verify it's the most recent records
         assert_eq!(records[0].sequence_number, 6);
         assert_eq!(records[4].sequence_number, 10);
+    }
+
+    #[test]
+    fn test_item_builder_all_value_types() {
+        use std::collections::HashMap;
+
+        // Test all ItemBuilder methods
+        let mut nested_map = HashMap::new();
+        nested_map.insert("nested_key".to_string(), Value::string("nested_value"));
+
+        let item = ItemBuilder::new()
+            .string("str_field", "hello")
+            .number("num_field", 42)
+            .bool("bool_field", true)
+            .null("null_field")
+            .binary("bin_field", vec![0u8, 1, 2, 3])
+            .list("list_field", vec![Value::string("a"), Value::number(1)])
+            .map("map_field", nested_map.clone())
+            .timestamp("ts_field", 1234567890)
+            .vector_f32("vec_field", vec![1.0, 2.0, 3.0])
+            .build();
+
+        // Verify all fields
+        assert_eq!(item.get("str_field").unwrap().as_string(), Some("hello"));
+
+        match item.get("num_field").unwrap() {
+            Value::N(n) => assert_eq!(n, "42"),
+            _ => panic!("Expected number"),
+        }
+
+        assert_eq!(item.get("bool_field").unwrap(), &Value::Bool(true));
+        assert_eq!(item.get("null_field").unwrap(), &Value::Null);
+
+        match item.get("bin_field").unwrap() {
+            Value::B(b) => assert_eq!(b.as_ref(), &[0u8, 1, 2, 3]),
+            _ => panic!("Expected binary"),
+        }
+
+        match item.get("list_field").unwrap() {
+            Value::L(list) => {
+                assert_eq!(list.len(), 2);
+                assert_eq!(list[0].as_string(), Some("a"));
+            }
+            _ => panic!("Expected list"),
+        }
+
+        match item.get("map_field").unwrap() {
+            Value::M(map) => {
+                assert_eq!(map.get("nested_key").unwrap().as_string(), Some("nested_value"));
+            }
+            _ => panic!("Expected map"),
+        }
+
+        match item.get("ts_field").unwrap() {
+            Value::Ts(ts) => assert_eq!(*ts, 1234567890),
+            _ => panic!("Expected timestamp"),
+        }
+
+        match item.get("vec_field").unwrap() {
+            Value::VecF32(vec) => assert_eq!(vec, &vec![1.0, 2.0, 3.0]),
+            _ => panic!("Expected vector"),
+        }
     }
 }
 

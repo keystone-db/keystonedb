@@ -3,10 +3,15 @@
 /// Provides DynamoDB-style streams that capture item-level modifications
 /// (INSERT, MODIFY, REMOVE) with configurable view types.
 
-use crate::{Key, Item};
+use crate::{Key, Item, Value};
 use serde::{Deserialize, Serialize};
 
+/// Maximum size for a single stream record (10MB)
+/// Records exceeding this size will be skipped to prevent memory exhaustion
+pub const MAX_STREAM_RECORD_SIZE: usize = 10 * 1024 * 1024; // 10MB
+
 /// Stream view type - controls what data is included in stream records
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamViewType {
     /// Only the key attributes of the item
@@ -26,6 +31,7 @@ impl Default for StreamViewType {
 }
 
 /// Stream event type
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StreamEventType {
     /// A new item was added to the table
@@ -164,8 +170,51 @@ impl StreamConfig {
 fn current_timestamp_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_millis() as i64
+}
+
+/// Estimate the size of a Value in bytes
+fn estimate_value_size(value: &Value) -> usize {
+    match value {
+        Value::S(s) => s.len(),
+        Value::N(n) => n.len(),
+        Value::B(b) => b.len(),
+        Value::Bool(_) => 1,
+        Value::Null => 0,
+        Value::Ts(_) => 8,
+        Value::L(list) => {
+            // Sum of all items in the list
+            list.iter().map(estimate_value_size).sum::<usize>() + (list.len() * 8) // 8 bytes overhead per item
+        }
+        Value::M(map) => {
+            // Sum of all keys and values in the map
+            map.iter()
+                .map(|(k, v)| k.len() + estimate_value_size(v) + 16) // 16 bytes overhead per entry
+                .sum()
+        }
+        Value::VecF32(vec) => {
+            // f32 vectors: 4 bytes per element
+            vec.len() * 4
+        }
+    }
+}
+
+/// Estimate the size of an Item in bytes
+fn estimate_item_size(item: &Item) -> usize {
+    item.iter()
+        .map(|(k, v)| k.len() + estimate_value_size(v) + 16) // 16 bytes overhead per attribute
+        .sum()
+}
+
+/// Estimate the size of a StreamRecord in bytes
+pub fn estimate_record_size(record: &StreamRecord) -> usize {
+    let key_size = record.key.pk.len() + record.key.sk.as_ref().map_or(0, |s| s.len());
+    let old_size = record.old_image.as_ref().map_or(0, estimate_item_size);
+    let new_size = record.new_image.as_ref().map_or(0, estimate_item_size);
+
+    // Base size: key + old image + new image + struct overhead
+    key_size + old_size + new_size + 100 // 100 bytes for metadata (sequence_number, event_type, timestamp, etc.)
 }
 
 #[cfg(test)]

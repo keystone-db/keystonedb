@@ -2,15 +2,18 @@
 ///
 /// Provides APIs for getting or writing multiple items in a single operation.
 
-use kstone_core::{Item, Key};
+use kstone_core::{Item, Key, Error, Result};
 use bytes::Bytes;
 use std::collections::HashMap;
+
+/// Maximum number of items in batch operations (matches DynamoDB limit)
+const MAX_BATCH_SIZE: usize = 100;
 
 /// Batch get request
 #[derive(Debug, Clone)]
 pub struct BatchGetRequest {
     /// Keys to retrieve
-    pub keys: Vec<Key>,
+    keys: Vec<Key>,
 }
 
 impl BatchGetRequest {
@@ -35,8 +38,18 @@ impl BatchGetRequest {
     }
 
     /// Get the keys
-    pub(crate) fn keys(&self) -> &[Key] {
+    pub fn keys(&self) -> &[Key] {
         &self.keys
+    }
+
+    /// Validate the batch size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.keys.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Batch size {} exceeds maximum {}", self.keys.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -65,6 +78,7 @@ impl BatchGetResponse {
 }
 
 /// Batch write request item
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum BatchWriteItem {
     /// Put an item
@@ -77,7 +91,7 @@ pub enum BatchWriteItem {
 #[derive(Debug, Clone)]
 pub struct BatchWriteRequest {
     /// Write items
-    pub items: Vec<BatchWriteItem>,
+    items: Vec<BatchWriteItem>,
 }
 
 impl BatchWriteRequest {
@@ -121,8 +135,18 @@ impl BatchWriteRequest {
     }
 
     /// Get the items
-    pub(crate) fn items(&self) -> &[BatchWriteItem] {
+    pub fn items(&self) -> &[BatchWriteItem] {
         &self.items
+    }
+
+    /// Validate the batch size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.items.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Batch size {} exceeds maximum {}", self.items.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 

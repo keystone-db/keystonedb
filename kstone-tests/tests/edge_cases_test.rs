@@ -1,7 +1,6 @@
 /// Edge cases and boundary condition tests for KeystoneDB
 
 use kstone_api::{Database, ItemBuilder};
-use kstone_core::Key;
 use tempfile::TempDir;
 
 #[test]
@@ -332,5 +331,83 @@ fn test_persistence_edge_cases() {
         let result = db.get(b"empty").unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().len(), 0);
+    }
+}
+
+#[test]
+fn test_unicode_keys() {
+    let dir = TempDir::new().unwrap();
+    let db = Database::create(dir.path()).unwrap();
+
+    // Test emoji in keys
+    let item = ItemBuilder::new().string("data", "test").build();
+    db.put("user#👤123".as_bytes(), item.clone()).unwrap();
+    let result = db.get("user#👤123".as_bytes()).unwrap();
+    assert!(result.is_some());
+
+    // Test Chinese characters
+    db.put("用户#456".as_bytes(), item.clone()).unwrap();
+    let result = db.get("用户#456".as_bytes()).unwrap();
+    assert!(result.is_some());
+
+    // Test mixed unicode
+    db.put("user#日本語🎉".as_bytes(), item).unwrap();
+    let result = db.get("user#日本語🎉".as_bytes()).unwrap();
+    assert!(result.is_some());
+}
+
+#[test]
+fn test_unicode_values() {
+    let dir = TempDir::new().unwrap();
+    let db = Database::create(dir.path()).unwrap();
+
+    let item = ItemBuilder::new()
+        .string("name", "日本語テスト")
+        .string("emoji", "🎉🎊🎁")
+        .string("mixed", "Hello 世界! 🌍")
+        .build();
+
+    db.put(b"unicode#1", item).unwrap();
+    let result = db.get(b"unicode#1").unwrap().unwrap();
+
+    assert_eq!(result.get("name").unwrap().as_string(), Some("日本語テスト"));
+    assert_eq!(result.get("emoji").unwrap().as_string(), Some("🎉🎊🎁"));
+    assert_eq!(result.get("mixed").unwrap().as_string(), Some("Hello 世界! 🌍"));
+}
+
+#[test]
+fn test_empty_values() {
+    let dir = TempDir::new().unwrap();
+    let db = Database::create(dir.path()).unwrap();
+
+    // Empty string value
+    let item = ItemBuilder::new()
+        .string("empty", "")
+        .build();
+    db.put(b"empty#1", item).unwrap();
+    let result = db.get(b"empty#1").unwrap().unwrap();
+    assert_eq!(result.get("empty").unwrap().as_string(), Some(""));
+}
+
+#[test]
+fn test_binary_with_null_bytes() {
+    let dir = TempDir::new().unwrap();
+    let db = Database::create(dir.path()).unwrap();
+
+    let data = vec![0u8, 1, 2, 0, 3, 0, 4];
+    let item = ItemBuilder::new()
+        .binary("data", bytes::Bytes::from(data.clone()))
+        .build();
+
+    db.put(b"binary#1", item).unwrap();
+    let result = db.get(b"binary#1").unwrap().unwrap();
+
+    // Verify binary data preserved correctly
+    assert!(result.get("data").is_some());
+    match result.get("data").unwrap() {
+        kstone_core::Value::B(bytes) => {
+            assert_eq!(bytes.as_ref(), &data[..]);
+        }
+        _ => panic!("Expected binary value"),
     }
 }

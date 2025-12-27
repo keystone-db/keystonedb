@@ -44,11 +44,15 @@ futures = "0.3"
 # Observability
 prometheus = { workspace = true }
 lazy_static = { workspace = true }
+once_cell = { workspace = true }
 axum = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
 
 # Rate Limiting
 governor = { workspace = true }
+
+# Cryptographic utilities
+subtle = "2.6"
 
 [dev-dependencies]
 tempfile = { workspace = true }

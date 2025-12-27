@@ -12,8 +12,9 @@ use crate::{
     expression::{UpdateAction, UpdateExecutor, ExpressionContext, ExpressionEvaluator, Expr},
     lsm::TransactWriteOperation,
 };
+use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 const NUM_STRIPES: usize = 256;
 const MEMTABLE_THRESHOLD: usize = 1000;
@@ -51,6 +52,8 @@ struct MemoryLsmInner {
     /// Next SST ID
     next_sst_id: u64,
     /// Table schema (for indexes, TTL, streams)
+    /// Note: Currently unused in memory mode, reserved for future feature parity
+    #[allow(dead_code)]
     schema: TableSchema,
 }
 
@@ -84,7 +87,7 @@ impl MemoryLsmEngine {
 
     /// Put an item
     pub fn put(&self, key: Key, item: Item) -> Result<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
 
         let seq = inner.next_seq;
         inner.next_seq += 1;
@@ -108,7 +111,7 @@ impl MemoryLsmEngine {
 
     /// Get an item
     pub fn get(&self, key: &Key) -> Result<Option<Item>> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         let stripe_idx = stripe_id(&key.pk);
         let stripe = &inner.stripes[stripe_idx];
         let key_bytes = key.encode();
@@ -130,7 +133,7 @@ impl MemoryLsmEngine {
 
     /// Delete an item
     pub fn delete(&self, key: Key) -> Result<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
 
         let seq = inner.next_seq;
         inner.next_seq += 1;
@@ -183,7 +186,7 @@ impl MemoryLsmEngine {
 
     /// Flush all stripes
     pub fn flush(&self) -> Result<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
 
         for stripe_idx in 0..NUM_STRIPES {
             if !inner.stripes[stripe_idx].memtable.is_empty() {
@@ -197,7 +200,7 @@ impl MemoryLsmEngine {
 
     /// Clear all data (for testing)
     pub fn clear(&self) -> Result<()> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
 
         for stripe in &mut inner.stripes {
             stripe.memtable.clear();
@@ -213,7 +216,7 @@ impl MemoryLsmEngine {
 
     /// Get the number of items in memory (approximate)
     pub fn len(&self) -> usize {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         let mut count = 0;
 
         for stripe in &inner.stripes {
@@ -233,7 +236,7 @@ impl MemoryLsmEngine {
 
     /// Query items within a partition
     pub fn query(&self, params: QueryParams) -> Result<QueryResult> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
 
         // Route to correct stripe
         let stripe_id = stripe_id(&params.pk);
@@ -326,7 +329,7 @@ impl MemoryLsmEngine {
 
     /// Scan all items across all stripes
     pub fn scan(&self, params: ScanParams) -> Result<ScanResult> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
 
         // Collect all records from all stripes
         let mut all_records: BTreeMap<Vec<u8>, Record> = BTreeMap::new();
@@ -507,7 +510,7 @@ impl MemoryLsmEngine {
     /// Transaction get - read multiple items atomically
     pub fn transact_get(&self, keys: &[Key]) -> Result<Vec<Option<Item>>> {
         // Hold read lock for consistent snapshot
-        let _inner = self.inner.read().unwrap();
+        let _inner = self.inner.read();
 
         let mut items = Vec::new();
         for key in keys {
@@ -525,7 +528,7 @@ impl MemoryLsmEngine {
         context: &ExpressionContext,
     ) -> Result<usize> {
         // Acquire write lock for atomicity
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
 
         // Phase 1: Read all items and check all conditions
         let mut current_items: Vec<Option<Item>> = Vec::new();

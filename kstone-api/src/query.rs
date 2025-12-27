@@ -6,6 +6,7 @@ use kstone_core::{Item, Key, iterator::{QueryParams, QueryResult, SortKeyConditi
 use bytes::Bytes;
 
 /// Query builder
+#[derive(Debug, Clone)]
 pub struct Query {
     params: QueryParams,
 }

@@ -177,7 +177,9 @@ impl S3Protocol {
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("sst") {
-                let file_name = path.file_name().unwrap().to_str().unwrap();
+                let file_name = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| anyhow!("Invalid SST filename in path: {:?}", path))?;
                 let sst_key = format!("{}/sst/{}", snapshot_prefix, file_name);
                 let sst_data = fs::read(&path).await?;
 
@@ -272,7 +274,8 @@ impl S3Protocol {
         if let Some(objects) = list_result.contents {
             for object in objects {
                 if let Some(key) = object.key {
-                    let file_name = key.split('/').last().unwrap();
+                    let file_name = key.split('/').last()
+                        .ok_or_else(|| anyhow!("Invalid S3 key format: {}", key))?;
                     let sst_obj = client
                         .get_object()
                         .bucket(&self.bucket)
@@ -313,7 +316,7 @@ impl S3Protocol {
                         .trim_end_matches('/')
                         .split('/')
                         .last()
-                        .unwrap()
+                        .ok_or_else(|| anyhow!("Invalid snapshot prefix format: {}", prefix))?
                         .to_string();
 
                     // Try to load metadata
@@ -470,7 +473,9 @@ impl S3Protocol {
         if let Some(objects) = list_result.contents {
             for object in objects {
                 if let (Some(key), Some(etag)) = (object.key, object.e_tag) {
-                    let file_name = key.split('/').last().unwrap().to_string();
+                    let file_name = key.split('/').last()
+                        .ok_or_else(|| anyhow!("Invalid S3 key format: {}", key))?
+                        .to_string();
                     files.insert(file_name, etag.trim_matches('"').to_string());
                 }
             }

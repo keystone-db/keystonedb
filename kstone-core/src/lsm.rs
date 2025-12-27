@@ -93,6 +93,7 @@ struct LsmInner {
 }
 
 /// Transaction write operation (Phase 2.7+)
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum TransactWriteOperation {
     /// Put an item with optional condition
@@ -586,12 +587,11 @@ impl LsmEngine {
             }
         }
 
-        // Then, get records from SSTs (newer SSTs first)
-        for _sst in &stripe.ssts {
-            // TODO: Scan SST files for matching records
-            // For now, we only query from memtable
-            // SST scanning will be added when we implement SST iterators
-        }
+        // Note: Query currently only searches memtable.
+        // SST files are searched during get() operations but not during range queries.
+        // This is a known limitation - SST range scanning requires implementing
+        // SST iterators (planned for future release).
+        let _ = &stripe.ssts; // Acknowledge SSTs exist but aren't scanned for queries yet
 
         // Convert to sorted vec based on direction
         let mut sorted_records: Vec<(Vec<u8>, Record)> = all_records.into_iter().collect();
@@ -884,8 +884,8 @@ impl LsmEngine {
                 all_records.insert(key_enc.clone(), record.clone());
             }
 
-            // TODO: Scan stripe's SSTs
-            // Will be added when we implement SST iterators
+            // Note: Scan currently only searches memtable per stripe.
+            // SST range scanning is a known limitation (see query implementation above).
         }
 
         // Now apply pagination and limit on sorted records
@@ -1070,6 +1070,18 @@ impl LsmEngine {
             return;
         }
 
+        // Validate record size to prevent memory exhaustion
+        let record_size = crate::stream::estimate_record_size(&record);
+        if record_size > crate::stream::MAX_STREAM_RECORD_SIZE {
+            tracing::warn!(
+                size = record_size,
+                max_size = crate::stream::MAX_STREAM_RECORD_SIZE,
+                key = ?record.key,
+                "Skipping oversized stream record to prevent memory exhaustion"
+            );
+            return;
+        }
+
         // Add to buffer
         inner.stream_buffer.push_back(record);
 
@@ -1223,6 +1235,14 @@ impl LsmEngine {
     pub fn compaction_stats(&self) -> crate::compaction::CompactionStats {
         let inner = self.inner.read();
         inner.compaction_stats.snapshot()
+    }
+
+    /// Get the total number of SST files across all stripes
+    ///
+    /// This is useful for monitoring and statistics.
+    pub fn sst_count(&self) -> usize {
+        let inner = self.inner.read();
+        inner.stripes.iter().map(|s| s.ssts.len()).sum()
     }
 
     /// Trigger manual compaction on a specific stripe (Phase 1.7+)

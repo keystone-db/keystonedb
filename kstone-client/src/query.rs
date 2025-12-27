@@ -1,10 +1,9 @@
 /// Remote query builder and response types
 use crate::convert::*;
-use crate::error::Result;
+use crate::error::{ClientError, Result};
 use bytes::Bytes;
 use kstone_core::Item;
 use kstone_proto::{self as proto, keystone_db_client::KeystoneDbClient};
-use tonic::transport::Channel;
 
 /// Remote query builder
 pub struct RemoteQuery {
@@ -130,10 +129,16 @@ impl RemoteQuery {
     }
 
     /// Execute the query
-    pub async fn execute(
+    pub async fn execute<T>(
         self,
-        client: &mut KeystoneDbClient<Channel>,
-    ) -> Result<RemoteQueryResponse> {
+        client: &mut KeystoneDbClient<T>,
+    ) -> Result<RemoteQueryResponse>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody> + Send + 'static,
+        T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        T::ResponseBody: tonic::codegen::Body<Data = bytes::Bytes> + Send + 'static,
+        <T::ResponseBody as tonic::codegen::Body>::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    {
         let request = proto::QueryRequest {
             partition_key: self.partition_key,
             sort_key_condition: self.sort_key_condition,
@@ -151,11 +156,12 @@ impl RemoteQuery {
             .into_inner();
 
         // Convert protobuf response to Rust types
-        let items: Vec<Item> = response
+        let items: Result<Vec<Item>> = response
             .items
             .into_iter()
-            .map(|proto_item| proto_item_to_ks(proto_item).expect("Invalid item from server"))
+            .map(|proto_item| proto_item_to_ks(proto_item).map_err(ClientError::from))
             .collect();
+        let items = items?;
 
         let last_key = response.last_evaluated_key.map(|key| {
             let (pk, sk) = proto_last_key_to_ks(key);

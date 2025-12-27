@@ -2,17 +2,20 @@
 ///
 /// Provides ACID transaction support with atomic reads and writes.
 
-use kstone_core::{Item, Key};
+use kstone_core::{Item, Key, Error, Result};
 use bytes::Bytes;
 
 #[cfg(test)]
 use std::collections::HashMap;
 
+/// Maximum number of items in transaction operations (matches DynamoDB limit)
+const MAX_BATCH_SIZE: usize = 100;
+
 /// Transaction get request - read multiple items atomically
 #[derive(Debug, Clone)]
 pub struct TransactGetRequest {
     /// Keys to retrieve
-    pub keys: Vec<Key>,
+    keys: Vec<Key>,
 }
 
 impl TransactGetRequest {
@@ -37,8 +40,18 @@ impl TransactGetRequest {
     }
 
     /// Get the keys
-    pub(crate) fn keys(&self) -> &[Key] {
+    pub fn keys(&self) -> &[Key] {
         &self.keys
+    }
+
+    /// Validate the transaction size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.keys.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Transaction size {} exceeds maximum {}", self.keys.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -62,6 +75,7 @@ impl TransactGetResponse {
 }
 
 /// Transaction write operation
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum TransactWriteOp {
     /// Put an item with optional condition
@@ -92,9 +106,9 @@ pub enum TransactWriteOp {
 #[derive(Debug, Clone)]
 pub struct TransactWriteRequest {
     /// Write operations
-    pub operations: Vec<TransactWriteOp>,
+    operations: Vec<TransactWriteOp>,
     /// Shared expression context for all operations
-    pub context: kstone_core::expression::ExpressionContext,
+    context: kstone_core::expression::ExpressionContext,
 }
 
 impl TransactWriteRequest {
@@ -120,6 +134,28 @@ impl TransactWriteRequest {
     /// Add a put operation with condition
     pub fn put_with_condition(mut self, pk: &[u8], item: Item, condition: impl Into<String>) -> Self {
         let key = Key::new(Bytes::copy_from_slice(pk));
+        self.operations.push(TransactWriteOp::Put {
+            key,
+            item,
+            condition: Some(condition.into()),
+        });
+        self
+    }
+
+    /// Add a put operation with sort key
+    pub fn put_with_sk(mut self, pk: &[u8], sk: &[u8], item: Item) -> Self {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
+        self.operations.push(TransactWriteOp::Put {
+            key,
+            item,
+            condition: None,
+        });
+        self
+    }
+
+    /// Add a put operation with sort key and condition
+    pub fn put_with_sk_and_condition(mut self, pk: &[u8], sk: &[u8], item: Item, condition: impl Into<String>) -> Self {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
         self.operations.push(TransactWriteOp::Put {
             key,
             item,
@@ -155,6 +191,34 @@ impl TransactWriteRequest {
         self
     }
 
+    /// Add an update operation with sort key
+    pub fn update_with_sk(mut self, pk: &[u8], sk: &[u8], update_expression: impl Into<String>) -> Self {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
+        self.operations.push(TransactWriteOp::Update {
+            key,
+            update_expression: update_expression.into(),
+            condition: None,
+        });
+        self
+    }
+
+    /// Add an update operation with sort key and condition
+    pub fn update_with_sk_and_condition(
+        mut self,
+        pk: &[u8],
+        sk: &[u8],
+        update_expression: impl Into<String>,
+        condition: impl Into<String>,
+    ) -> Self {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
+        self.operations.push(TransactWriteOp::Update {
+            key,
+            update_expression: update_expression.into(),
+            condition: Some(condition.into()),
+        });
+        self
+    }
+
     /// Add a delete operation
     pub fn delete(mut self, pk: &[u8]) -> Self {
         let key = Key::new(Bytes::copy_from_slice(pk));
@@ -175,9 +239,39 @@ impl TransactWriteRequest {
         self
     }
 
+    /// Add a delete operation with sort key
+    pub fn delete_with_sk(mut self, pk: &[u8], sk: &[u8]) -> Self {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
+        self.operations.push(TransactWriteOp::Delete {
+            key,
+            condition: None,
+        });
+        self
+    }
+
+    /// Add a delete operation with sort key and condition
+    pub fn delete_with_sk_and_condition(mut self, pk: &[u8], sk: &[u8], condition: impl Into<String>) -> Self {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
+        self.operations.push(TransactWriteOp::Delete {
+            key,
+            condition: Some(condition.into()),
+        });
+        self
+    }
+
     /// Add a condition check (no write, just verify condition)
     pub fn condition_check(mut self, pk: &[u8], condition: impl Into<String>) -> Self {
         let key = Key::new(Bytes::copy_from_slice(pk));
+        self.operations.push(TransactWriteOp::ConditionCheck {
+            key,
+            condition: condition.into(),
+        });
+        self
+    }
+
+    /// Add a condition check with sort key
+    pub fn condition_check_with_sk(mut self, pk: &[u8], sk: &[u8], condition: impl Into<String>) -> Self {
+        let key = Key::with_sk(Bytes::copy_from_slice(pk), Bytes::copy_from_slice(sk));
         self.operations.push(TransactWriteOp::ConditionCheck {
             key,
             condition: condition.into(),
@@ -197,14 +291,30 @@ impl TransactWriteRequest {
         self
     }
 
+    /// Add a pre-built operation directly
+    pub fn add_operation(mut self, op: TransactWriteOp) -> Self {
+        self.operations.push(op);
+        self
+    }
+
     /// Get the operations
-    pub(crate) fn operations(&self) -> &[TransactWriteOp] {
+    pub fn operations(&self) -> &[TransactWriteOp] {
         &self.operations
     }
 
     /// Get the context
-    pub(crate) fn context(&self) -> &kstone_core::expression::ExpressionContext {
+    pub fn context(&self) -> &kstone_core::expression::ExpressionContext {
         &self.context
+    }
+
+    /// Validate the transaction size
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.operations.len() > MAX_BATCH_SIZE {
+            return Err(Error::InvalidArgument(
+                format!("Transaction size {} exceeds maximum {}", self.operations.len(), MAX_BATCH_SIZE)
+            ));
+        }
+        Ok(())
     }
 }
 

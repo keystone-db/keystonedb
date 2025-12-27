@@ -90,6 +90,11 @@ impl PartiQLParser {
             return Err(Error::InvalidQuery("Invalid JSON map syntax".into()));
         }
 
+        // Bounds check before slicing to prevent panic
+        if brace_end >= sql.len() {
+            return Err(Error::InvalidQuery("Invalid JSON map: closing brace beyond string bounds".into()));
+        }
+
         let json_str = &sql[brace_start..=brace_end];
         let value_map = Self::parse_json_string(json_str)?;
 
@@ -659,14 +664,80 @@ impl PartiQLParser {
     /// Parse a JSON string as SqlValue::Map
     fn parse_json_string(s: &str) -> Result<SqlValue> {
         // DynamoDB uses single quotes, but JSON requires double quotes
-        // Convert single quotes to double quotes (simple approach - may need refinement)
-        let json_normalized = s.replace('\'', "\"");
+        // Properly convert single-quoted strings to double-quoted JSON
+        let json_normalized = Self::normalize_json_quotes(s)?;
 
         let json_value: serde_json::Value = serde_json::from_str(&json_normalized).map_err(|e| {
             Error::InvalidQuery(format!("Failed to parse JSON: {}", e))
         })?;
 
         Self::json_to_sql_value(&json_value)
+    }
+
+    /// Safely normalize single-quoted JSON to double-quoted JSON
+    /// Handles escaped quotes and quotes inside string values properly
+    fn normalize_json_quotes(s: &str) -> Result<String> {
+        let mut result = String::with_capacity(s.len() + s.len() / 10); // Extra space for escape chars
+        let mut chars = s.chars().peekable();
+        let mut in_string = false;
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' if in_string => {
+                    // Backslash - peek ahead to handle escape sequences
+                    if let Some(&next_ch) = chars.peek() {
+                        match next_ch {
+                            '\'' => {
+                                // Escaped single quote in single-quoted string
+                                // Consume the quote and output unescaped (JSON doesn't need single quotes escaped)
+                                chars.next();
+                                result.push('\'');
+                            }
+                            '"' => {
+                                // Escaped double quote in single-quoted string
+                                // Consume and output as escaped double quote for JSON
+                                chars.next();
+                                result.push('\\');
+                                result.push('"');
+                            }
+                            '\\' => {
+                                // Escaped backslash
+                                // Consume and output as escaped backslash for JSON
+                                chars.next();
+                                result.push('\\');
+                                result.push('\\');
+                            }
+                            _ => {
+                                // Other escape sequence (e.g., \n, \t) - preserve as-is
+                                result.push('\\');
+                            }
+                        }
+                    } else {
+                        // Trailing backslash
+                        result.push('\\');
+                    }
+                }
+                '\'' => {
+                    // String delimiter - replace with double quote
+                    in_string = !in_string;
+                    result.push('"');
+                }
+                '"' if in_string => {
+                    // Unescaped double quote in single-quoted string - escape it for JSON
+                    result.push('\\');
+                    result.push('"');
+                }
+                _ => {
+                    result.push(ch);
+                }
+            }
+        }
+
+        if in_string {
+            return Err(Error::InvalidQuery("Unterminated string in JSON".into()));
+        }
+
+        Ok(result)
     }
 
     /// Convert serde_json::Value to SqlValue
@@ -1344,5 +1415,113 @@ mod tests {
             }
             _ => panic!("Expected SELECT statement"),
         }
+    }
+
+    // Quote injection vulnerability tests
+    #[test]
+    fn test_parse_insert_with_double_quotes_in_value() {
+        // This tests the fix for the quote injection vulnerability
+        // The value contains unescaped double quotes that should be properly escaped
+        let sql = r#"INSERT INTO users VALUE {'pk': 'user#123', 'name': 'Alice "The Amazing" Smith'}"#;
+        let stmt = PartiQLParser::parse(sql).unwrap();
+
+        match stmt {
+            PartiQLStatement::Insert(insert) => {
+                match &insert.value {
+                    SqlValue::Map(map) => {
+                        assert_eq!(map.get("name"), Some(&SqlValue::String("Alice \"The Amazing\" Smith".to_string())));
+                    }
+                    _ => panic!("Expected Map value"),
+                }
+            }
+            _ => panic!("Expected INSERT statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_insert_with_escaped_double_quotes() {
+        // Test with already escaped double quotes in the input
+        let sql = r#"INSERT INTO users VALUE {'pk': 'user#123', 'data': 'val\"with\"quotes'}"#;
+        let stmt = PartiQLParser::parse(sql).unwrap();
+
+        match stmt {
+            PartiQLStatement::Insert(insert) => {
+                match &insert.value {
+                    SqlValue::Map(map) => {
+                        assert_eq!(map.get("data"), Some(&SqlValue::String("val\"with\"quotes".to_string())));
+                    }
+                    _ => panic!("Expected Map value"),
+                }
+            }
+            _ => panic!("Expected INSERT statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_insert_with_escaped_single_quotes() {
+        // Test with escaped single quotes (should be unescaped in JSON)
+        let sql = r#"INSERT INTO users VALUE {'pk': 'user#123', 'text': 'it\'s a test'}"#;
+        let stmt = PartiQLParser::parse(sql).unwrap();
+
+        match stmt {
+            PartiQLStatement::Insert(insert) => {
+                match &insert.value {
+                    SqlValue::Map(map) => {
+                        assert_eq!(map.get("text"), Some(&SqlValue::String("it's a test".to_string())));
+                    }
+                    _ => panic!("Expected Map value"),
+                }
+            }
+            _ => panic!("Expected INSERT statement"),
+        }
+    }
+
+    #[test]
+    fn test_parse_insert_with_mixed_quotes() {
+        // Complex test with both single and double quotes
+        let sql = r#"INSERT INTO users VALUE {'pk': 'user#123', 'bio': 'He said "it\'s great!"'}"#;
+        let stmt = PartiQLParser::parse(sql).unwrap();
+
+        match stmt {
+            PartiQLStatement::Insert(insert) => {
+                match &insert.value {
+                    SqlValue::Map(map) => {
+                        assert_eq!(map.get("bio"), Some(&SqlValue::String("He said \"it's great!\"".to_string())));
+                    }
+                    _ => panic!("Expected Map value"),
+                }
+            }
+            _ => panic!("Expected INSERT statement"),
+        }
+    }
+
+    #[test]
+    fn test_reject_unterminated_string() {
+        // Should reject JSON with unterminated string
+        let sql = r#"INSERT INTO users VALUE {'pk': 'user#123', 'name': 'Alice}"#;
+        let result = PartiQLParser::parse(sql);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unterminated string"));
+    }
+
+    #[test]
+    fn test_normalize_json_quotes_basic() {
+        let input = "{'key': 'value'}";
+        let result = PartiQLParser::normalize_json_quotes(input).unwrap();
+        assert_eq!(result, r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn test_normalize_json_quotes_with_double_quotes() {
+        let input = r#"{'key': 'val"with"quotes'}"#;
+        let result = PartiQLParser::normalize_json_quotes(input).unwrap();
+        assert_eq!(result, r#"{"key": "val\"with\"quotes"}"#);
+    }
+
+    #[test]
+    fn test_normalize_json_quotes_with_escaped_single_quotes() {
+        let input = r#"{'key': 'it\'s'}"#;
+        let result = PartiQLParser::normalize_json_quotes(input).unwrap();
+        assert_eq!(result, r#"{"key": "it's"}"#);
     }
 }

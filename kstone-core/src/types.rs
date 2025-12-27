@@ -9,6 +9,7 @@ pub type Lsn = u64;
 pub type SeqNo = u64;
 
 /// DynamoDB-style typed value
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     /// Number (stored as string for precision)

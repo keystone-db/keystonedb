@@ -350,8 +350,8 @@ mod tests {
     #[test]
     fn test_sync_metadata_store() {
         let dir = TempDir::new().unwrap();
-        let db = Database::create(dir.path()).unwrap();
-        let store = SyncMetadataStore::new(&db);
+        let db = Arc::new(Database::create(dir.path()).unwrap());
+        let store = SyncMetadataStore::new(Arc::clone(&db));
 
         // Initialize
         store.initialize().unwrap();
@@ -381,8 +381,8 @@ mod tests {
     #[test]
     fn test_checkpoint_storage() {
         let dir = TempDir::new().unwrap();
-        let db = Database::create(dir.path()).unwrap();
-        let store = SyncMetadataStore::new(&db);
+        let db = Arc::new(Database::create(dir.path()).unwrap());
+        let store = SyncMetadataStore::new(Arc::clone(&db));
 
         let checkpoint = SyncCheckpoint {
             endpoint_id: EndpointId::from_str("remote1"),

@@ -102,7 +102,21 @@ kstone --version
 
 ### Build from Source
 
+**Prerequisites:**
+- Rust 1.70+ (install via [rustup](https://rustup.rs/))
+- Protocol Buffers compiler (`protoc`) - required for gRPC components
+
 ```bash
+# Install protoc (required for kstone-server and kstone-client)
+# macOS
+brew install protobuf
+
+# Ubuntu/Debian
+sudo apt-get install protobuf-compiler
+
+# Windows (via Chocolatey)
+choco install protoc
+
 # Clone repository
 git clone https://github.com/keystone-db/keystonedb.git
 cd keystonedb
@@ -118,6 +132,11 @@ cargo build --release
 sudo cp target/release/kstone /usr/local/bin/
 sudo cp target/release/kstone-server /usr/local/bin/
 ```
+
+> **Note:** If you only need the embedded database (kstone-core, kstone-api), you can build without protoc:
+> ```bash
+> cargo build --release -p kstone-core -p kstone-api -p kstone-cli
+> ```
 
 ## Quick Start
 
@@ -184,20 +203,19 @@ kstone query mydb.keystone "SELECT * FROM users" --limit 100
 ## Rust API
 
 ```rust
-use kstone_api::{Database, ItemBuilder, Query, ScanBuilder};
+use kstone_api::{Database, ItemBuilder, Query, Scan, Update, HealthStatus};
+use kstone_core::{Value, expression::ExpressionContext};
 
 // Create or open database
 let db = Database::create("mydb.keystone")?;
 let db = Database::open("mydb.keystone")?;
 
-// Create with custom configuration (Phase 8+)
+// Create with custom configuration
 use kstone_core::DatabaseConfig;
-let config = DatabaseConfig {
-    memtable_threshold: 5000,        // Records per stripe before flush
-    compaction_threshold: 4,         // SSTs before compaction
-    max_concurrent_compactions: 4,   // Parallel compaction limit
-    ..Default::default()
-};
+let config = DatabaseConfig::new()
+    .with_max_memtable_records(5000)        // Records per stripe before flush
+    .with_max_memtable_size_bytes(8 * 1024 * 1024)  // 8MB memtable size
+    .with_compression();                     // Enable SST compression
 let db = Database::create_with_config("mydb.keystone", config)?;
 
 // Put an item
@@ -214,23 +232,18 @@ if let Some(item) = db.get(b"user#123")? {
 }
 
 // Query with partition key
-let query = Query::new()
-    .partition_key(b"user#123")
+let query = Query::new(b"user#123")
     .limit(10);
 let response = db.query(query)?;
 
-// Scan with filter
-let scan = ScanBuilder::new()
-    .filter_expression("age > :min_age")
-    .expression_value(":min_age", 25)
-    .limit(100)
-    .build();
+// Scan all items
+let scan = Scan::new()
+    .limit(100);
 let response = db.scan(scan)?;
 
 // Parallel scan
-let scan = ScanBuilder::new()
-    .parallel(4, 0)  // 4 segments, reading segment 0
-    .build();
+let scan = Scan::new()
+    .segment(0, 4);  // Segment 0 of 4 total segments
 let response = db.scan(scan)?;
 
 // Execute PartiQL
@@ -238,40 +251,54 @@ let sql = "SELECT name, age FROM users WHERE pk = 'user#123' LIMIT 10";
 let response = db.execute_statement(sql)?;
 
 // Batch operations
-let batch_get = db.batch_get()
-    .add_key(b"user#123")
-    .add_key(b"user#456")
-    .execute()?;
+use kstone_api::{BatchGetRequest, BatchWriteRequest};
 
-let batch_write = db.batch_write()
+let batch_get = BatchGetRequest::new()
+    .add_key(b"user#123")
+    .add_key(b"user#456");
+let response = db.batch_get(batch_get)?;
+
+let batch_write = BatchWriteRequest::new()
     .put(b"user#789", item1)
-    .delete(b"user#999")
-    .execute()?;
+    .delete(b"user#999");
+let response = db.batch_write(batch_write)?;
 
 // Transactions
-let txn_get = db.transact_get()
-    .add_get(b"user#123")
-    .add_get(b"user#456")
-    .execute()?;
+use kstone_api::{TransactGetRequest, TransactWriteRequest};
 
-let txn_write = db.transact_write()
+let txn_get = TransactGetRequest::new()
+    .get(b"user#123")
+    .get(b"user#456");
+let response = db.transact_get(txn_get)?;
+
+let txn_write = TransactWriteRequest::new()
     .put(b"user#111", item1)
-    .update(b"user#222", "SET age = age + 1", None)
-    .delete(b"user#333")
-    .execute()?;
+    .update(b"user#222", "SET age = age + 1")
+    .delete(b"user#333");
+let response = db.transact_write(txn_write)?;
 
 // Conditional operations
-db.put_if_not_exists(b"user#123", item)?;
-
-db.update(
+db.put_conditional(
     b"user#123",
-    "SET age = :new_age",
-    Some("age < :new_age"),
+    item.clone(),
+    "attribute_not_exists(pk)",
+    ExpressionContext::new(),
 )?;
 
+let update = Update::new(b"user#123")
+    .expression("SET age = :new_age")
+    .condition("age < :new_age")
+    .value(":new_age", Value::number(30));
+db.update(update)?;
+
 // Update expressions
-db.update(b"user#123", "SET age = age + 1, visits = visits + 1", None)?;
-db.update(b"user#123", "REMOVE temp_field", None)?;
+let update = Update::new(b"user#123")
+    .expression("SET age = age + 1, visits = visits + 1");
+db.update(update)?;
+
+let update = Update::new(b"user#123")
+    .expression("REMOVE temp_field");
+db.update(update)?;
 
 // Database statistics and health (Phase 8+)
 let stats = db.stats()?;
@@ -399,7 +426,8 @@ kstone-server --db-path mydb.keystone \
 ### Rust Client
 
 ```rust
-use kstone_client::{Client, RemoteQuery};
+use kstone_client::{Client, RemoteQuery, Value};
+use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -482,7 +510,12 @@ cargo test -p kstone-tests --test stability_tests -- --ignored
 
 ## License
 
-[Add your license here]
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
 
 ## Contributing
 

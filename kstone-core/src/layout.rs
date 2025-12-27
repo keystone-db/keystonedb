@@ -65,12 +65,14 @@ impl Region {
         Self { offset, size }
     }
 
-    pub fn end(&self) -> u64 {
-        self.offset + self.size
+    pub fn end(&self) -> Result<u64> {
+        self.offset.checked_add(self.size)
+            .ok_or_else(|| Error::Internal("Region end offset overflow".into()))
     }
 
-    pub fn contains(&self, offset: u64) -> bool {
-        offset >= self.offset && offset < self.end()
+    pub fn contains(&self, offset: u64) -> Result<bool> {
+        let end = self.end()?;
+        Ok(offset >= self.offset && offset < end)
     }
 }
 
@@ -250,11 +252,11 @@ mod tests {
     fn test_region_contains() {
         let region = Region::new(1000, 500);
 
-        assert!(!region.contains(999));
-        assert!(region.contains(1000));
-        assert!(region.contains(1250));
-        assert!(region.contains(1499));
-        assert!(!region.contains(1500));
+        assert!(!region.contains(999).unwrap());
+        assert!(region.contains(1000).unwrap());
+        assert!(region.contains(1250).unwrap());
+        assert!(region.contains(1499).unwrap());
+        assert!(!region.contains(1500).unwrap());
     }
 
     #[test]

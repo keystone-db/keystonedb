@@ -101,6 +101,17 @@ impl<'a> ExpressionEvaluator<'a> {
 
     /// Evaluate expression against item
     pub fn evaluate(&self, expr: &Expr) -> Result<bool> {
+        self.evaluate_with_depth(expr, 0)
+    }
+
+    /// Evaluate expression with depth tracking to prevent stack overflow
+    fn evaluate_with_depth(&self, expr: &Expr, depth: usize) -> Result<bool> {
+        if depth > MAX_EXPRESSION_DEPTH {
+            return Err(Error::InvalidExpression(
+                "Expression too deeply nested".into()
+            ));
+        }
+
         match expr {
             Expr::Equal(left, right) => {
                 let l = self.resolve_value(left)?;
@@ -133,13 +144,15 @@ impl<'a> ExpressionEvaluator<'a> {
                 Ok(self.compare_values(&l, &r)? >= 0)
             }
             Expr::And(left, right) => {
-                Ok(self.evaluate(left)? && self.evaluate(right)?)
+                Ok(self.evaluate_with_depth(left, depth + 1)? &&
+                   self.evaluate_with_depth(right, depth + 1)?)
             }
             Expr::Or(left, right) => {
-                Ok(self.evaluate(left)? || self.evaluate(right)?)
+                Ok(self.evaluate_with_depth(left, depth + 1)? ||
+                   self.evaluate_with_depth(right, depth + 1)?)
             }
             Expr::Not(expr) => {
-                Ok(!self.evaluate(expr)?)
+                Ok(!self.evaluate_with_depth(expr, depth + 1)?)
             }
             Expr::AttributeExists(path) => {
                 let attr_name = self.resolve_attribute_name(path);
@@ -524,10 +537,14 @@ impl Lexer {
     }
 }
 
+/// Maximum expression nesting depth to prevent stack overflow
+const MAX_EXPRESSION_DEPTH: usize = 100;
+
 /// Expression parser
 pub struct ExpressionParser {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
 
 impl ExpressionParser {
@@ -545,8 +562,17 @@ impl ExpressionParser {
             }
         }
 
-        let mut parser = Self { tokens, pos: 0 };
+        let mut parser = Self { tokens, pos: 0, depth: 0 };
         parser.parse_expr()
+    }
+
+    fn check_depth(&self) -> Result<()> {
+        if self.depth >= MAX_EXPRESSION_DEPTH {
+            return Err(Error::InvalidExpression(
+                format!("Expression too deeply nested (max depth: {})", MAX_EXPRESSION_DEPTH)
+            ));
+        }
+        Ok(())
     }
 
     fn current(&self) -> &Token {
@@ -567,10 +593,16 @@ impl ExpressionParser {
     }
 
     fn parse_expr(&mut self) -> Result<Expr> {
-        self.parse_or()
+        self.check_depth()?;
+        self.depth += 1;
+        let result = self.parse_or();
+        self.depth -= 1;
+        result
     }
 
     fn parse_or(&mut self) -> Result<Expr> {
+        self.check_depth()?;
+        self.depth += 1;
         let mut left = self.parse_and()?;
 
         while self.current() == &Token::Or {
@@ -579,10 +611,13 @@ impl ExpressionParser {
             left = Expr::Or(Box::new(left), Box::new(right));
         }
 
+        self.depth -= 1;
         Ok(left)
     }
 
     fn parse_and(&mut self) -> Result<Expr> {
+        self.check_depth()?;
+        self.depth += 1;
         let mut left = self.parse_not()?;
 
         while self.current() == &Token::And {
@@ -591,13 +626,17 @@ impl ExpressionParser {
             left = Expr::And(Box::new(left), Box::new(right));
         }
 
+        self.depth -= 1;
         Ok(left)
     }
 
     fn parse_not(&mut self) -> Result<Expr> {
+        self.check_depth()?;
         if self.current() == &Token::Not {
             self.advance();
+            self.depth += 1;
             let expr = self.parse_not()?;
+            self.depth -= 1;
             Ok(Expr::Not(Box::new(expr)))
         } else {
             self.parse_comparison()
@@ -644,10 +683,13 @@ impl ExpressionParser {
     }
 
     fn parse_operand(&mut self) -> Result<Expr> {
+        self.check_depth()?;
         match self.current().clone() {
             Token::LeftParen => {
                 self.advance();
+                self.depth += 1;
                 let expr = self.parse_expr()?;
+                self.depth -= 1;
                 self.expect(Token::RightParen)?;
                 Ok(expr)
             }
@@ -1196,5 +1238,132 @@ mod tests {
             Value::N(n) => assert_eq!(n, "150"),
             _ => panic!("Expected number"),
         }
+    }
+
+    #[test]
+    fn test_expression_depth_limit() {
+        // Test unbounded NOT recursion
+        let mut deep_not_expr = String::new();
+        for _ in 0..150 {
+            deep_not_expr.push_str("NOT ");
+        }
+        deep_not_expr.push_str("active");
+
+        let result = ExpressionParser::parse(&deep_not_expr);
+        assert!(result.is_err());
+        match result {
+            Err(Error::InvalidExpression(msg)) => {
+                assert!(msg.contains("too deeply nested"), "Error message: {}", msg);
+            }
+            _ => panic!("Expected InvalidExpression error for deep nesting"),
+        }
+
+        // Test unbounded parentheses nesting
+        let mut deep_paren_expr = String::new();
+        for _ in 0..150 {
+            deep_paren_expr.push('(');
+        }
+        deep_paren_expr.push_str("age > :min");
+        for _ in 0..150 {
+            deep_paren_expr.push(')');
+        }
+
+        let result = ExpressionParser::parse(&deep_paren_expr);
+        assert!(result.is_err());
+        match result {
+            Err(Error::InvalidExpression(msg)) => {
+                assert!(msg.contains("too deeply nested"), "Error message: {}", msg);
+            }
+            _ => panic!("Expected InvalidExpression error for deep nesting"),
+        }
+    }
+
+    #[test]
+    fn test_expression_depth_limit_just_under() {
+        // Test that we can parse expressions just under the limit
+        let mut expr = String::new();
+        for _ in 0..50 {
+            expr.push_str("NOT ");
+        }
+        expr.push_str("active");
+
+        let result = ExpressionParser::parse(&expr);
+        assert!(result.is_ok(), "Should be able to parse expression under depth limit");
+    }
+
+    #[test]
+    fn test_expression_empty_placeholder() {
+        // Empty placeholder is syntactically valid, but would fail at evaluation
+        let result = ExpressionParser::parse("age > :");
+        assert!(result.is_ok(), "Parser accepts empty placeholder syntactically");
+
+        // But evaluation should fail since ':' won't be in context
+        let expr = result.unwrap();
+        let mut item = HashMap::new();
+        item.insert("age".to_string(), Value::number(30));
+        let context = ExpressionContext::new();
+        let evaluator = ExpressionEvaluator::new(&item, &context);
+
+        // This should fail because ':' is not in the context
+        let eval_result = evaluator.evaluate(&expr);
+        assert!(eval_result.is_err(), "Evaluation should fail for empty placeholder");
+    }
+
+    #[test]
+    fn test_expression_unclosed_parenthesis() {
+        let result = ExpressionParser::parse("(age > :val");
+        assert!(result.is_err(), "Should fail on unclosed parenthesis");
+    }
+
+    #[test]
+    fn test_expression_invalid_operator() {
+        let result = ExpressionParser::parse("age <> :val");
+        // <> should be valid (not equal)
+        assert!(result.is_ok(), "<> is a valid not-equal operator");
+    }
+
+    #[test]
+    fn test_evaluator_depth_limit() {
+        // Create a deeply nested expression manually (bypassing parser)
+        let mut item = HashMap::new();
+        item.insert("active".to_string(), Value::Bool(true));
+        let context = ExpressionContext::new();
+
+        // Build a deeply nested NOT expression (150 levels deep)
+        let mut expr = Expr::AttributeExists("active".to_string());
+        for _ in 0..150 {
+            expr = Expr::Not(Box::new(expr));
+        }
+
+        let evaluator = ExpressionEvaluator::new(&item, &context);
+        let result = evaluator.evaluate(&expr);
+
+        assert!(result.is_err());
+        match result {
+            Err(Error::InvalidExpression(msg)) => {
+                assert!(msg.contains("too deeply nested"), "Error message: {}", msg);
+            }
+            _ => panic!("Expected InvalidExpression error for deep nesting during evaluation"),
+        }
+    }
+
+    #[test]
+    fn test_evaluator_depth_limit_just_under() {
+        // Create a nested expression just under the limit
+        let mut item = HashMap::new();
+        item.insert("active".to_string(), Value::Bool(true));
+        let context = ExpressionContext::new();
+
+        // Build a nested NOT expression (50 levels deep - well under limit of 100)
+        let mut expr = Expr::AttributeExists("active".to_string());
+        for _ in 0..50 {
+            expr = Expr::Not(Box::new(expr));
+        }
+
+        let evaluator = ExpressionEvaluator::new(&item, &context);
+        let result = evaluator.evaluate(&expr);
+
+        // This should succeed since we're under the depth limit
+        assert!(result.is_ok(), "Should be able to evaluate expression under depth limit");
     }
 }

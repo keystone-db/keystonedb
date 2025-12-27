@@ -229,7 +229,7 @@ impl BlockReader {
 }
 
 /// Encrypt data using AES-256-GCM
-fn encrypt_data(data: &[u8], key: &[u8; 32], block_id: BlockId) -> Result<Bytes> {
+fn encrypt_data(data: &[u8], key: &[u8; 32], _block_id: BlockId) -> Result<Bytes> {
     use aes_gcm::{
         aead::{Aead, KeyInit},
         Aes256Gcm, Nonce,
@@ -237,34 +237,47 @@ fn encrypt_data(data: &[u8], key: &[u8; 32], block_id: BlockId) -> Result<Bytes>
 
     let cipher = Aes256Gcm::new(key.into());
 
-    // Use block_id as part of nonce (12 bytes)
+    // Generate a random 12-byte nonce for each encryption
+    // This ensures nonces are never reused even if the same block is encrypted multiple times
     let mut nonce_bytes = [0u8; 12];
-    nonce_bytes[0..8].copy_from_slice(&block_id.to_le_bytes());
+    getrandom::getrandom(&mut nonce_bytes)
+        .map_err(|e| Error::EncryptionError(format!("Failed to generate nonce: {}", e)))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
         .encrypt(nonce, data)
         .map_err(|e| Error::EncryptionError(format!("Encryption failed: {}", e)))?;
 
-    Ok(Bytes::from(ciphertext))
+    // Prepend nonce to ciphertext so it can be extracted during decryption
+    // Format: [nonce(12) | ciphertext | tag(16)]
+    let mut result = Vec::with_capacity(12 + ciphertext.len());
+    result.extend_from_slice(&nonce_bytes);
+    result.extend_from_slice(&ciphertext);
+
+    Ok(Bytes::from(result))
 }
 
 /// Decrypt data using AES-256-GCM
-fn decrypt_data(data: &[u8], key: &[u8; 32], block_id: BlockId) -> Result<Bytes> {
+fn decrypt_data(data: &[u8], key: &[u8; 32], _block_id: BlockId) -> Result<Bytes> {
     use aes_gcm::{
         aead::{Aead, KeyInit},
         Aes256Gcm, Nonce,
     };
 
+    // Extract nonce from the first 12 bytes
+    // Format: [nonce(12) | ciphertext | tag(16)]
+    if data.len() < 12 {
+        return Err(Error::EncryptionError("Encrypted data too short".to_string()));
+    }
+
+    let nonce_bytes = &data[0..12];
+    let ciphertext = &data[12..];
+    let nonce = Nonce::from_slice(nonce_bytes);
+
     let cipher = Aes256Gcm::new(key.into());
 
-    // Use block_id as part of nonce (12 bytes)
-    let mut nonce_bytes = [0u8; 12];
-    nonce_bytes[0..8].copy_from_slice(&block_id.to_le_bytes());
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
     let plaintext = cipher
-        .decrypt(nonce, data)
+        .decrypt(nonce, ciphertext)
         .map_err(|e| Error::EncryptionError(format!("Decryption failed: {}", e)))?;
 
     Ok(Bytes::from(plaintext))
@@ -413,5 +426,62 @@ mod tests {
         let mut reader = BlockReader::new(file);
         let read_block = reader.read(1, 0).unwrap();
         assert_eq!(read_block.data, data);
+    }
+
+    #[test]
+    fn test_nonce_uniqueness() {
+        // Verify that encrypting the same data twice produces different ciphertexts
+        // This ensures nonces are never reused
+        let tmp1 = NamedTempFile::new().unwrap();
+        let tmp2 = NamedTempFile::new().unwrap();
+        let data = Bytes::from("same data");
+        let key = [42u8; 32];
+
+        // Write same data to two blocks with same block_id
+        let encrypted_data1 = {
+            let file = tmp1.reopen().unwrap();
+            let mut writer = BlockWriter::with_encryption(file, key);
+            let block = Block::with_encryption(1, data.clone());
+            writer.write(&block, 0).unwrap();
+            writer.flush().unwrap();
+
+            // Read raw encrypted data from disk
+            let mut file = tmp1.reopen().unwrap();
+            let mut buf = vec![0u8; BLOCK_SIZE];
+            file.read_exact(&mut buf).unwrap();
+            buf
+        };
+
+        let encrypted_data2 = {
+            let file = tmp2.reopen().unwrap();
+            let mut writer = BlockWriter::with_encryption(file, key);
+            let block = Block::with_encryption(1, data.clone());
+            writer.write(&block, 0).unwrap();
+            writer.flush().unwrap();
+
+            // Read raw encrypted data from disk
+            let mut file = tmp2.reopen().unwrap();
+            let mut buf = vec![0u8; BLOCK_SIZE];
+            file.read_exact(&mut buf).unwrap();
+            buf
+        };
+
+        // The raw encrypted blocks should be different due to different nonces
+        assert_ne!(
+            encrypted_data1, encrypted_data2,
+            "Encrypted blocks should be different due to unique nonces"
+        );
+
+        // But both should decrypt to the same plaintext
+        let file1 = tmp1.reopen().unwrap();
+        let mut reader1 = BlockReader::with_encryption(file1, key);
+        let decrypted1 = reader1.read(1, 0).unwrap();
+
+        let file2 = tmp2.reopen().unwrap();
+        let mut reader2 = BlockReader::with_encryption(file2, key);
+        let decrypted2 = reader2.read(1, 0).unwrap();
+
+        assert_eq!(decrypted1.data, data);
+        assert_eq!(decrypted2.data, data);
     }
 }

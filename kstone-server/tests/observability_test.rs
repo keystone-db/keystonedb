@@ -4,8 +4,9 @@
 
 use kstone_api::Database;
 use kstone_proto::{PutRequest, GetRequest, Item, Value, value::Value as ProtoValue};
-use kstone_server::{KeystoneService, metrics};
+use kstone_server::{KeystoneService, RateLimiter, metrics};
 use std::collections::HashMap;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Test that metrics are accessible
@@ -14,7 +15,7 @@ async fn test_metrics_accessible() {
     // Create test database
     let temp_dir = TempDir::new().unwrap();
     let db = Database::create(temp_dir.path()).unwrap();
-    let _service = KeystoneService::new(db);
+    let _service = KeystoneService::new(db, Arc::new(RateLimiter::new(1000, 0)));
 
     // Verify metrics can be accessed (they're registered via lazy_static)
     let _ = metrics::RPC_REQUESTS_TOTAL.with_label_values(&["put", "success"]);
@@ -50,7 +51,7 @@ async fn test_metrics_collection_on_operations() {
     // Create test database
     let temp_dir = TempDir::new().unwrap();
     let db = Database::create(temp_dir.path()).unwrap();
-    let service = KeystoneService::new(db);
+    let service = KeystoneService::new(db, Arc::new(RateLimiter::new(1000, 0)));
 
     // Get baseline metrics
     let baseline = metrics::RPC_REQUESTS_TOTAL
@@ -93,7 +94,7 @@ async fn test_rpc_operations_complete() {
     // Create test database
     let temp_dir = TempDir::new().unwrap();
     let db = Database::create(temp_dir.path()).unwrap();
-    let service = KeystoneService::new(db);
+    let service = KeystoneService::new(db, Arc::new(RateLimiter::new(1000, 0)));
 
     // Create a get request
     let get_request = tonic::Request::new(GetRequest {
@@ -120,7 +121,7 @@ async fn test_trace_id_in_spans() {
     // Create test database
     let temp_dir = TempDir::new().unwrap();
     let db = Database::create(temp_dir.path()).unwrap();
-    let service = KeystoneService::new(db);
+    let service = KeystoneService::new(db, Arc::new(RateLimiter::new(1000, 0)));
 
     // Make a request (which generates a trace_id internally)
     let mut attributes = HashMap::new();
@@ -155,7 +156,7 @@ async fn test_validation_errors() {
     // Create test database
     let temp_dir = TempDir::new().unwrap();
     let db = Database::create(temp_dir.path()).unwrap();
-    let service = KeystoneService::new(db);
+    let service = KeystoneService::new(db, Arc::new(RateLimiter::new(1000, 0)));
 
     // Create an invalid request (missing item)
     let invalid_put = tonic::Request::new(PutRequest {

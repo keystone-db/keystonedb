@@ -3,14 +3,47 @@ use crate::error::{ClientError, Result};
 use kstone_core::Item;
 use kstone_proto::{self as proto, keystone_db_client::KeystoneDbClient};
 use tonic::transport::Channel;
+use tonic::service::Interceptor;
+use tonic::metadata::AsciiMetadataValue;
+use tonic::{Request, Status};
+
+/// Interceptor that adds API key authentication to requests
+#[derive(Clone)]
+struct AuthInterceptor {
+    api_key: Option<AsciiMetadataValue>,
+}
+
+impl AuthInterceptor {
+    fn new(api_key: Option<String>) -> Result<Self> {
+        let api_key = match api_key {
+            Some(key) => {
+                let bearer = format!("Bearer {}", key);
+                let value = AsciiMetadataValue::try_from(bearer)
+                    .map_err(|e| ClientError::ConnectionError(format!("Invalid API key format: {}", e)))?;
+                Some(value)
+            }
+            None => None,
+        };
+        Ok(Self { api_key })
+    }
+}
+
+impl Interceptor for AuthInterceptor {
+    fn call(&mut self, mut request: Request<()>) -> std::result::Result<Request<()>, Status> {
+        if let Some(ref api_key) = self.api_key {
+            request.metadata_mut().insert("authorization", api_key.clone());
+        }
+        Ok(request)
+    }
+}
 
 /// KeystoneDB remote client
 pub struct Client {
-    inner: KeystoneDbClient<Channel>,
+    inner: KeystoneDbClient<tonic::service::interceptor::InterceptedService<Channel, AuthInterceptor>>,
 }
 
 impl Client {
-    /// Connect to a KeystoneDB server
+    /// Connect to a KeystoneDB server without authentication
     ///
     /// # Arguments
     /// * `addr` - Server address (e.g., "http://127.0.0.1:50051")
@@ -24,6 +57,30 @@ impl Client {
     /// # }
     /// ```
     pub async fn connect(addr: impl Into<String>) -> Result<Self> {
+        Self::connect_with_api_key(addr, None).await
+    }
+
+    /// Connect to a KeystoneDB server with API key authentication
+    ///
+    /// # Arguments
+    /// * `addr` - Server address (e.g., "http://127.0.0.1:50051")
+    /// * `api_key` - API key for authentication (if the server requires it)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use kstone_client::Client;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = Client::connect_with_api_key(
+    ///     "http://localhost:50051",
+    ///     Some("my-secret-key".to_string())
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_with_api_key(
+        addr: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Result<Self> {
         let addr = addr.into();
         let channel = Channel::from_shared(addr)
             .map_err(|e| ClientError::ConnectionError(format!("Invalid address: {}", e)))?
@@ -31,7 +88,8 @@ impl Client {
             .await
             .map_err(|e| ClientError::ConnectionError(format!("Failed to connect: {}", e)))?;
 
-        let inner = KeystoneDbClient::new(channel);
+        let interceptor = AuthInterceptor::new(api_key)?;
+        let inner = KeystoneDbClient::with_interceptor(channel, interceptor);
         Ok(Self { inner })
     }
 
@@ -149,10 +207,14 @@ impl Client {
             .map_err(|e| ClientError::from(e))?
             .into_inner();
 
-        Ok(response.item.map(|proto_item| {
-            crate::convert::proto_item_to_ks(proto_item)
-                .expect("Server returned invalid item")
-        }))
+        match response.item {
+            Some(proto_item) => {
+                let item = crate::convert::proto_item_to_ks(proto_item)
+                    .map_err(ClientError::from)?;
+                Ok(Some(item))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Get an item with partition key and sort key
@@ -176,10 +238,14 @@ impl Client {
             .map_err(|e| ClientError::from(e))?
             .into_inner();
 
-        Ok(response.item.map(|proto_item| {
-            crate::convert::proto_item_to_ks(proto_item)
-                .expect("Server returned invalid item")
-        }))
+        match response.item {
+            Some(proto_item) => {
+                let item = crate::convert::proto_item_to_ks(proto_item)
+                    .map_err(ClientError::from)?;
+                Ok(Some(item))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Delete an item with a simple partition key
@@ -459,8 +525,4 @@ impl Client {
         crate::partiql::parse_execute_statement_response(response)
     }
 
-    /// Get a reference to the underlying gRPC client
-    pub(crate) fn inner_mut(&mut self) -> &mut KeystoneDbClient<Channel> {
-        &mut self.inner
-    }
 }
