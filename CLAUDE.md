@@ -4,9 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. **Phase 6 (Network Layer & gRPC Server) is COMPLETE** - the database now supports remote access via gRPC in addition to embedded usage. Previous phases (0-3) are complete: storage engine, DynamoDB API, and full index support (LSI, GSI, TTL, Streams).
+KeystoneDB is a single-file, embedded, DynamoDB-style database written in Rust. **All core phases (0-8) are COMPLETE** - the database now supports:
+- Full DynamoDB-compatible API (CRUD, Query, Scan, Batch, Transactions)
+- Secondary indexes (LSI, GSI), TTL, and Change Streams
+- PartiQL SQL-compatible query language
+- gRPC server for remote access
+- Cloud sync with S3 and filesystem backends
+- Interactive CLI shell with autocomplete
 
-**Target:** Eventually a full Dynamo-model database with cloud sync, FTS/vector indexes, and attachment to DynamoDB or remote KeystoneDB instances.
+**Current Status:** Production-ready embedded database with cloud sync capabilities. Future work includes FTS/vector indexes and DynamoDB attachment.
 
 ## Commands
 
@@ -32,6 +38,7 @@ cargo test
 # Run specific crate tests
 cargo test -p kstone-core
 cargo test -p kstone-api
+cargo test -p kstone-sync
 cargo test -p kstone-tests
 
 # Run specific test
@@ -39,7 +46,23 @@ cargo test -p kstone-core --lib lsm::tests::test_lsm_put_get
 
 # Run integration tests only
 cargo test -p kstone-tests
+
+# Run sync integration tests (requires filesystem access)
+cargo test -p kstone-sync --test sync_integration_test
+
+# Run benchmarks
+cargo bench -p kstone-tests
+
+# Run with release optimizations
+cargo test --release
 ```
+
+### Key Test Files
+- `kstone-tests/tests/integration_test.rs` - End-to-end API tests
+- `kstone-tests/tests/concurrent_access_test.rs` - Multi-threaded safety
+- `kstone-tests/tests/crash_recovery_test.rs` - WAL replay and durability
+- `kstone-tests/tests/large_dataset_test.rs` - Performance with large data
+- `kstone-sync/tests/sync_integration_test.rs` - Full sync workflow
 
 ### CLI Usage
 ```bash
@@ -81,14 +104,23 @@ cargo run --bin kstone-server -- --db-path <path> --port 50051
 ## Architecture
 
 ### Workspace Structure
-This is a Cargo workspace with 7 crates:
-- **kstone-core**: Storage engine internals (WAL, SST, LSM)
+This is a Cargo workspace with 9 crates:
+- **kstone-core**: Storage engine internals (WAL, SST, LSM, PartiQL parser)
 - **kstone-api**: Public API wrapping the core engine
 - **kstone-proto**: Protocol Buffers definitions for gRPC
-- **kstone-server**: gRPC server implementation
+- **kstone-server**: gRPC server implementation with rate limiting and metrics
 - **kstone-client**: gRPC client library for remote access
+- **kstone-sync**: Cloud sync engine (S3, filesystem, vector clocks, Merkle trees)
 - **kstone-cli**: Command-line binary for local database access
-- **kstone-tests**: Integration tests
+- **kstone-tests**: Integration tests and benchmarks
+- **c-ffi**: C foreign function interface (for language bindings)
+
+### Example Applications
+Located in `examples/`:
+- **url-shortener**: REST API with TTL-based URL expiration
+- **cache-server**: Simple cache service with KeystoneDB backend
+- **todo-api**: Task management API demonstrating CRUD patterns
+- **blog-engine**: Full blog with posts, tags, and statistics
 
 ### Core Modules (kstone-core)
 
@@ -106,8 +138,19 @@ This is a Cargo workspace with 7 crates:
 - `mmap.rs` - Memory-mapped file reader pool
 - `wal_ring.rs` - Ring buffer WAL with group commit (Phase 1.3+)
 - `bloom.rs` - Bloom filter implementation (Phase 1.4+)
-- `sst_block.rs` - Block-based SST with compression & bloom filters (Phase 1.4+)
+- `sst_block.rs` - Block-based SST with Zstd compression & bloom filters (Phase 1.4+)
 - `manifest.rs` - Metadata catalog with ring buffer format (Phase 1.5+)
+
+**Advanced modules:**
+- `config.rs` - DatabaseConfig for resource limits and compression settings
+- `compaction.rs` - Background compaction with K-way merge
+- `iterator.rs` - Query/Scan with sort key conditions
+- `expression.rs` - DynamoDB-style condition expressions
+- `index.rs` - LSI/GSI secondary indexes
+- `stream.rs` - Change Data Capture (CDC) streams
+- `validation.rs` - Schema validation with attribute constraints
+- `retry.rs` - Retry policies with exponential backoff
+- `partiql/` - SQL-compatible query language (parser, validator, translator)
 
 ### Data Flow (Write Path - Phase 1.6)
 1. `Database::put()` (kstone-api) → `LsmEngine::put()` (kstone-core)
@@ -1433,6 +1476,122 @@ let db = LsmEngine::create_with_config(path, config, TableSchema::new())?;
 3. Determines next SeqNo from max in WAL
 4. Ready for operations
 
+### Zstd Compression
+
+SST files support Zstd compression for reduced disk usage:
+
+```rust
+use kstone_core::{LsmEngine, DatabaseConfig, TableSchema};
+
+// Enable compression with default level (3)
+let config = DatabaseConfig::new()
+    .with_compression();
+
+// Or specify compression level (1-22)
+// Level 1: fastest, Level 22: best compression
+let config = DatabaseConfig::new()
+    .with_compression_level(6);
+
+let db = LsmEngine::create_with_config(path, config, TableSchema::new())?;
+```
+
+### Schema Validation
+
+Attribute-level constraints for items:
+
+```rust
+use kstone_core::validation::{Validator, AttributeSchema, AttributeType, ValueConstraint};
+
+// Define attribute schemas
+let mut validator = Validator::new();
+
+// Required string attribute
+validator.add_attribute(
+    AttributeSchema::new("name", AttributeType::String)
+        .required()
+        .with_constraint(ValueConstraint::MinLength(1))
+        .with_constraint(ValueConstraint::MaxLength(100))
+);
+
+// Number with range constraint
+validator.add_attribute(
+    AttributeSchema::new("age", AttributeType::Number)
+        .with_constraint(ValueConstraint::MinValue("0".to_string()))
+        .with_constraint(ValueConstraint::MaxValue("150".to_string()))
+);
+
+// Pattern-matching constraint
+validator.add_attribute(
+    AttributeSchema::new("email", AttributeType::String)
+        .with_constraint(ValueConstraint::Pattern(r"^[\w\.-]+@[\w\.-]+\.\w+$".to_string()))
+);
+
+// Enum constraint
+validator.add_attribute(
+    AttributeSchema::new("status", AttributeType::String)
+        .with_constraint(ValueConstraint::Enum(vec![
+            Value::S("active".to_string()),
+            Value::S("inactive".to_string()),
+            Value::S("pending".to_string()),
+        ]))
+);
+
+// Validate an item
+let result = validator.validate(&item);
+match result {
+    Ok(()) => println!("Item is valid"),
+    Err(e) => println!("Validation failed: {}", e),
+}
+```
+
+### Retry Policies
+
+Automatic retry with exponential backoff for transient failures:
+
+```rust
+use kstone_core::retry::{retry_with_policy, RetryPolicy};
+
+// Predefined policies
+let fast = RetryPolicy::fast();       // 3 retries, 10-100ms backoff
+let standard = RetryPolicy::standard(); // 5 retries, 100-5000ms backoff
+let no_retry = RetryPolicy::no_retry();
+
+// Custom policy
+let policy = RetryPolicy::new(
+    4,      // max_attempts
+    50,     // initial_backoff_ms
+    2000,   // max_backoff_ms
+    2.0,    // backoff_multiplier
+);
+
+// Use with any fallible operation
+let result = retry_with_policy(&policy, || {
+    some_flaky_operation()
+})?;
+
+// Convenience function with default policy
+use kstone_core::retry::retry;
+let result = retry(|| some_flaky_operation())?;
+```
+
+### Server Rate Limiting
+
+gRPC server rate limiting to prevent overload:
+
+```rust
+// Server configuration (in kstone-server)
+use kstone_server::RateLimiter;
+
+// Create rate limiter
+// Args: per_connection_rps, global_rps (0 = unlimited)
+let limiter = RateLimiter::new(100, 1000);
+
+// Check before handling request
+if let Err(status) = limiter.check_rate_limit() {
+    return Err(status); // Returns RESOURCE_EXHAUSTED
+}
+```
+
 ## gRPC Server (Phase 6)
 
 ### Protocol Definition (kstone-proto)
@@ -1732,57 +1891,64 @@ All sub-phases 2.1-2.7 implemented with full DynamoDB-compatible API.
 **Phase 3 (Indexes) - COMPLETE ✅**
 All sub-phases 3.1-3.4 implemented with complete DynamoDB-style secondary indexes, TTL, and streams.
 
-**Future phases** (not yet implemented):
+**Phase 4: PartiQL Compatibility - COMPLETE ✅**
 
-**Phase 4: PartiQL Compatibility**
-Add SQL-compatible query language support for DynamoDB-style operations.
+SQL-compatible query language support for DynamoDB-style operations.
 
-*Phase 4.1 PartiQL Parser*
-- Implement SQL parser supporting SELECT, INSERT, UPDATE, DELETE
+*Phase 4.1 PartiQL Parser - COMPLETE ✅*
+- SQL parser using sqlparser-rs supporting SELECT, INSERT, UPDATE, DELETE
 - Lexer for SQL tokens (keywords, identifiers, operators, literals)
-- Recursive descent parser for PartiQL grammar
-- AST representation for queries and DML statements
+- Recursive descent parser converts to simplified AST
+- Statement length validation (1-8192 chars per DynamoDB spec)
+- Special handling for INSERT with JSON map syntax
 
-*Phase 4.2 Query Translation*
-- Convert PartiQL SELECT to KeystoneDB Query/Scan operations
-- WHERE clause parsing for partition key and sort key conditions
-- Support for index hints (query LSI/GSI)
-- Pagination support (LIMIT, continuation tokens)
+*Phase 4.2 Query Translation - COMPLETE ✅*
+- PartiQL SELECT converts to KeystoneDB Query/Scan operations
+- WHERE clause parsing with AND conditions (OR not supported - DynamoDB limitation)
+- Index queries via table.index_name syntax
+- LIMIT and OFFSET support for pagination
+- ORDER BY support for result ordering
+- IN and BETWEEN operators for range queries
 
-*Phase 4.3 DML Translation*
-- Map INSERT to put operations
-- Map UPDATE to update operations with SET/REMOVE/ADD
-- Map DELETE to delete operations
-- Single-item constraints (PartiQL doesn't support bulk DELETE WHERE)
+*Phase 4.3 DML Translation - COMPLETE ✅*
+- INSERT maps to put operations with JSON VALUE clause
+- UPDATE maps to SET/REMOVE operations with WHERE clause
+- DELETE maps to delete with WHERE clause
+- Arithmetic expressions in UPDATE (SET x = x + :inc)
+- Single-item constraints enforced (no bulk operations)
 
-*Phase 4.4 Expression Mapping*
-- Translate WHERE clauses to existing expression system
-- Convert SQL comparison operators to expression AST
-- Handle attribute names and value placeholders
-- Support for AND/OR/NOT logical operators
-
-*Phase 4.5 CLI Integration*
-- Add `kstone query <path> '<partiql>'` command
-- ExecuteStatement API (single query)
-- BatchExecuteStatement API (batch queries)
-- Result formatting (table/JSON output)
+*Phase 4.4 Validation - COMPLETE ✅*
+- DynamoDB-specific constraints enforced (no JOINs, no subqueries)
+- No GROUP BY, HAVING, or window functions
+- No OR in WHERE clause (use multiple queries)
+- Required WHERE clause for UPDATE and DELETE
 
 **PartiQL Example Usage:**
 ```bash
 # SELECT with WHERE clause
-kstone query mydb.keystone "SELECT * FROM items WHERE pk = 'user#123'"
+kstone shell mydb.keystone
+kstone> SELECT * FROM items WHERE pk = 'user#123';
 
 # SELECT with index
-kstone query mydb.keystone "SELECT * FROM items.email-index WHERE pk = 'org#acme' AND email = 'alice@example.com'"
+kstone> SELECT * FROM items.email_index WHERE pk = 'org#acme';
 
-# INSERT
-kstone query mydb.keystone "INSERT INTO items VALUE {'pk': 'user#999', 'name': 'Alice', 'age': 30}"
+# INSERT with JSON map
+kstone> INSERT INTO items VALUE {'pk': 'user#999', 'name': 'Alice', 'age': 30};
 
-# UPDATE
-kstone query mydb.keystone "UPDATE items SET age = 31 WHERE pk = 'user#999'"
+# UPDATE with SET
+kstone> UPDATE items SET age = 31 WHERE pk = 'user#999';
+
+# UPDATE with arithmetic
+kstone> UPDATE items SET score = score + 10 WHERE pk = 'user#999';
+
+# UPDATE with REMOVE
+kstone> UPDATE items SET name = 'Bob' REMOVE temp WHERE pk = 'user#999';
 
 # DELETE
-kstone query mydb.keystone "DELETE FROM items WHERE pk = 'user#999'"
+kstone> DELETE FROM items WHERE pk = 'user#999';
+
+# SELECT with LIMIT and ORDER BY
+kstone> SELECT * FROM items WHERE pk = 'user#123' ORDER BY sk DESC LIMIT 10;
 ```
 
 **Phase 5: In-Memory Database - COMPLETE ✅**
@@ -1998,7 +2164,101 @@ Goodbye!
 - `.timer <on|off>` - Show/hide query timing
 - `.exit` or `.quit` - Exit shell
 
-**Phase 8+: Attachment Framework**
-- DynamoDB sync (bidirectional replication)
-- Remote KeystoneDB sync (peer-to-peer replication)
-- Cloud integration and sync strategies
+**Phase 8: Cloud Sync - COMPLETE ✅**
+
+Bidirectional synchronization with cloud storage and remote databases.
+
+*Phase 8.1 Sync Infrastructure - COMPLETE ✅*
+- **kstone-sync** crate with full sync engine
+- VectorClock for causality tracking (happens-before relationships)
+- MerkleTree for efficient diff detection (16-way fanout)
+- ChangeTracker for local change monitoring
+- ConflictManager with resolution strategies
+
+*Phase 8.2 Sync Engine - COMPLETE ✅*
+- SyncEngine state machine (Idle → Connecting → Handshaking → Discovering → Transferring → Committing → Completed)
+- Event-driven architecture with async event channel
+- Automatic sync with configurable intervals
+- Batch processing for efficient transfers
+- Compression support (optional)
+
+*Phase 8.3 Conflict Resolution - COMPLETE ✅*
+- ConflictStrategy enum: LastWriterWins, FirstWriterWins, Custom
+- Conflict detection via vector clock comparison
+- ConflictResolution results (UseLocal, UseRemote, Merged)
+- Pending conflict queue for manual resolution
+
+*Phase 8.4 Protocol Support - COMPLETE ✅*
+- **S3Protocol**: Upload/download snapshots to S3-compatible storage
+- **FilesystemProtocol**: Sync between local databases
+- SyncEndpoint abstraction for extensibility
+- Merkle-based diff exchange for bandwidth efficiency
+
+*Phase 8.5 Offline Support - COMPLETE ✅*
+- OfflineQueue for storing pending operations
+- RetryPolicy with exponential backoff
+- SyncMetadataStore for persistence
+- Checkpoint management for recovery
+
+**Cloud Sync Example Usage:**
+```rust
+use kstone_sync::{CloudSyncBuilder, SyncEndpoint, ConflictStrategy};
+use kstone_api::Database;
+use std::sync::Arc;
+
+// Create sync engine
+let db = Arc::new(Database::create("local.keystone")?);
+let engine = CloudSyncBuilder::new()
+    .with_database(db)
+    .with_endpoint(SyncEndpoint::FileSystem {
+        path: "/path/to/remote.keystone".to_string(),
+    })
+    .with_conflict_strategy(ConflictStrategy::LastWriterWins)
+    .with_sync_interval(std::time::Duration::from_secs(30))
+    .with_batch_size(100)
+    .build()?;
+
+// Perform sync
+let stats = engine.sync(endpoint).await?;
+println!("Sent: {}, Received: {}", stats.items_sent, stats.items_received);
+
+// Subscribe to events
+let mut rx = engine.subscribe().unwrap();
+while let Some(event) = rx.recv().await {
+    match event {
+        SyncEvent::Progress { sent, received, total } => {
+            println!("Progress: {}/{}", sent + received, total);
+        }
+        SyncEvent::ConflictDetected { key, conflict_id } => {
+            println!("Conflict: {:?}", key);
+        }
+        SyncEvent::Completed { stats } => {
+            println!("Sync complete!");
+        }
+        _ => {}
+    }
+}
+```
+
+**S3 Sync Example:**
+```rust
+use kstone_sync::SyncEndpoint;
+
+// Configure S3 endpoint
+let endpoint = SyncEndpoint::S3 {
+    bucket: "my-bucket".to_string(),
+    prefix: "backups/".to_string(),
+    region: "us-east-1".to_string(),
+    endpoint_url: None, // Use default AWS endpoint
+    credentials: None,  // Use default credential chain
+};
+
+// Sync with S3
+engine.sync(endpoint).await?;
+```
+
+**Phase 9+: Future Development**
+- DynamoDB attachment (bidirectional replication with AWS DynamoDB)
+- Full-text search (FTS) indexes
+- Vector similarity indexes for embeddings
+- Multi-master replication
