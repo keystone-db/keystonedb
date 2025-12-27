@@ -1,4 +1,6 @@
-use crate::{Error, Result};
+use crate::Result;
+#[cfg(test)]
+use crate::Error;
 use std::time::Duration;
 
 /// Configuration for retry behavior with exponential backoff.
@@ -111,19 +113,12 @@ pub fn retry_with_policy<F, T>(
 where
     F: FnMut() -> Result<T>,
 {
-    let mut last_error = None;
-
     // Initial attempt (attempt 0)
-    match operation() {
+    let mut last_error = match operation() {
         Ok(result) => return Ok(result),
-        Err(e) => {
-            if !e.is_retryable() {
-                // Non-retryable error, fail immediately
-                return Err(e);
-            }
-            last_error = Some(e);
-        }
-    }
+        Err(e) if !e.is_retryable() => return Err(e),
+        Err(e) => e,
+    };
 
     // Retry attempts
     for attempt in 0..policy.max_attempts {
@@ -132,20 +127,13 @@ where
 
         match operation() {
             Ok(result) => return Ok(result),
-            Err(e) => {
-                if !e.is_retryable() {
-                    // Non-retryable error, fail immediately
-                    return Err(e);
-                }
-                last_error = Some(e);
-            }
+            Err(e) if !e.is_retryable() => return Err(e),
+            Err(e) => last_error = e,
         }
     }
 
     // All retries exhausted, return last error
-    Err(last_error.unwrap_or_else(|| {
-        Error::Internal("retry exhausted without error".to_string())
-    }))
+    Err(last_error)
 }
 
 /// Retries an operation with the default policy.

@@ -102,7 +102,21 @@ kstone --version
 
 ### Build from Source
 
+**Prerequisites:**
+- Rust 1.70+ (install via [rustup](https://rustup.rs/))
+- Protocol Buffers compiler (`protoc`) - required for gRPC components
+
 ```bash
+# Install protoc (required for kstone-server and kstone-client)
+# macOS
+brew install protobuf
+
+# Ubuntu/Debian
+sudo apt-get install protobuf-compiler
+
+# Windows (via Chocolatey)
+choco install protoc
+
 # Clone repository
 git clone https://github.com/keystone-db/keystonedb.git
 cd keystonedb
@@ -118,6 +132,11 @@ cargo build --release
 sudo cp target/release/kstone /usr/local/bin/
 sudo cp target/release/kstone-server /usr/local/bin/
 ```
+
+> **Note:** If you only need the embedded database (kstone-core, kstone-api), you can build without protoc:
+> ```bash
+> cargo build --release -p kstone-core -p kstone-api -p kstone-cli
+> ```
 
 ## Quick Start
 
@@ -482,7 +501,12 @@ cargo test -p kstone-tests --test stability_tests -- --ignored
 
 ## License
 
-[Add your license here]
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
 
 ## Contributing
 

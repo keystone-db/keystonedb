@@ -103,9 +103,10 @@ impl BackgroundWorker {
                         break;
                     }
 
-                    // TODO: Actually perform compaction here
-                    // This will be connected to LsmEngine in Task 4
-                    debug!("Would compact stripe {}", request.stripe_id);
+                    // Note: Compaction is currently performed synchronously in LsmEngine.
+                    // This async background worker is infrastructure for future async compaction.
+                    // Active compaction is triggered via LsmEngine::trigger_compaction().
+                    debug!("Compaction request for stripe {} (currently handled synchronously)", request.stripe_id);
                 }
             }
 

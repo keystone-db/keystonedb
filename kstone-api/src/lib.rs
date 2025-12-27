@@ -485,7 +485,7 @@ impl Database {
             DatabaseEngine::Disk(e) => {
                 Ok(DatabaseStats {
                     total_keys: None, // Would require expensive scan
-                    total_sst_files: 0, // TODO: implement
+                    total_sst_files: e.sst_count() as u64,
                     wal_size_bytes: None,
                     memtable_size_bytes: None,
                     total_disk_size_bytes: None,

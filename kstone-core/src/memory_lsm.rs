@@ -51,6 +51,8 @@ struct MemoryLsmInner {
     /// Next SST ID
     next_sst_id: u64,
     /// Table schema (for indexes, TTL, streams)
+    /// Note: Currently unused in memory mode, reserved for future feature parity
+    #[allow(dead_code)]
     schema: TableSchema,
 }
 
