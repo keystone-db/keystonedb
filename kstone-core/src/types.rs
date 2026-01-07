@@ -125,6 +125,35 @@ impl Key {
         buf.freeze()
     }
 
+    /// Decode key from storage format
+    /// Note: Uses big-endian byte order to match encode() which uses put_u32 (big-endian)
+    pub fn decode(data: &[u8]) -> crate::Result<Self> {
+        if data.len() < 4 {
+            return Err(crate::Error::Corruption("Key too short".into()));
+        }
+
+        let pk_len = u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize;
+        if data.len() < 4 + pk_len + 4 {
+            return Err(crate::Error::Corruption("Key too short for pk".into()));
+        }
+
+        let pk = Bytes::copy_from_slice(&data[4..4 + pk_len]);
+
+        let sk_len_offset = 4 + pk_len;
+        let sk_len = u32::from_be_bytes(data[sk_len_offset..sk_len_offset + 4].try_into().unwrap()) as usize;
+
+        let sk = if sk_len > 0 {
+            if data.len() < sk_len_offset + 4 + sk_len {
+                return Err(crate::Error::Corruption("Key too short for sk".into()));
+            }
+            Some(Bytes::copy_from_slice(&data[sk_len_offset + 4..sk_len_offset + 4 + sk_len]))
+        } else {
+            None
+        };
+
+        Ok(Key { pk, sk })
+    }
+
     /// Hash for stripe selection (256 stripes)
     pub fn stripe(&self) -> u8 {
         let hash = crc32fast::hash(&self.pk);
@@ -188,6 +217,27 @@ mod tests {
         let key_with_sk = Key::with_sk(b"user#123".to_vec(), b"post#456".to_vec());
         let encoded = key_with_sk.encode();
         assert!(!encoded.is_empty());
+    }
+
+    #[test]
+    fn test_key_encode_decode_roundtrip() {
+        // Test key without sort key
+        let key = Key::new(b"user#123".to_vec());
+        let encoded = key.encode();
+        let decoded = Key::decode(&encoded).unwrap();
+        assert_eq!(key, decoded);
+
+        // Test key with sort key
+        let key_with_sk = Key::with_sk(b"user#123".to_vec(), b"post#456".to_vec());
+        let encoded = key_with_sk.encode();
+        let decoded = Key::decode(&encoded).unwrap();
+        assert_eq!(key_with_sk, decoded);
+
+        // Test empty pk
+        let empty_pk_key = Key::new(b"".to_vec());
+        let encoded = empty_pk_key.encode();
+        let decoded = Key::decode(&encoded).unwrap();
+        assert_eq!(empty_pk_key, decoded);
     }
 
     #[test]

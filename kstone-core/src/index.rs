@@ -121,6 +121,9 @@ pub struct TableSchema {
     pub local_indexes: Vec<LocalSecondaryIndex>,
     /// Global secondary indexes (Phase 3.2+)
     pub global_indexes: Vec<GlobalSecondaryIndex>,
+    /// Full-text search indexes (Phase 11+)
+    #[serde(default)]
+    pub text_indexes: Vec<crate::fts::TextIndex>,
     /// TTL attribute name (Phase 3.3+)
     /// When set, items with this attribute containing a timestamp in the past are considered expired
     pub ttl_attribute_name: Option<String>,
@@ -158,6 +161,19 @@ impl TableSchema {
     /// Get GSI by name (Phase 3.2+)
     pub fn get_global_index(&self, name: &str) -> Option<&GlobalSecondaryIndex> {
         self.global_indexes.iter().find(|idx| idx.name == name)
+    }
+
+    /// Add a full-text search index (Phase 11+)
+    ///
+    /// Text indexes enable fast keyword search across text attributes.
+    pub fn with_text_index(mut self, index: crate::fts::TextIndex) -> Self {
+        self.text_indexes.push(index);
+        self
+    }
+
+    /// Get text index by name (Phase 11+)
+    pub fn get_text_index(&self, name: &str) -> Option<&crate::fts::TextIndex> {
+        self.text_indexes.iter().find(|idx| idx.name == name)
     }
 
     /// Enable TTL (Time To Live) with the specified attribute name (Phase 3.3+)

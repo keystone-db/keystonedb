@@ -43,6 +43,7 @@ pub mod iterator; // Phase 2.1+ query/scan support
 pub mod expression; // Phase 2.3+ expression system
 pub mod index; // Phase 3.1+ index support (LSI, GSI)
 pub mod stream; // Phase 3.4+ change data capture (streams)
+pub mod fts; // Phase 11+ full-text search
 pub mod partiql; // Phase 4+ PartiQL (SQL-compatible query language)
 pub mod config; // Phase 8+ database configuration
 pub mod retry; // Phase 8+ retry logic with exponential backoff
